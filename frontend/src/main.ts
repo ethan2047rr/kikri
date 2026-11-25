@@ -1,149 +1,92 @@
-import { Call, Events } from "/wails/runtime.js";
-import type { AuthInfo, Snapshot, Source, ToolStatus } from "./types";
+import { Events } from "/wails/runtime.js";
+import { scheduleSummary } from "./format";
+import { loadLog, renderLog } from "./log";
+import { renderOnboarding } from "./onboarding";
+import { renderSettings } from "./settings";
+import { renderStatus } from "./status";
+import type { Snapshot } from "./types";
+import { call, h } from "./ui";
 
-const SERVICE = "github.com/ethan2047rr/kikri/internal/app.Service";
 const EVENT_SNAPSHOT = "kikri:snapshot";
 
-const SOURCE_LABEL: Record<Source, string> = {
-  "override": "手动指定",
-  "login-shell": "登录 shell",
-  "process-path": "进程 PATH",
-  "fallback": "常见路径",
-};
+type Tab = "status" | "log" | "settings";
+const TABS: { id: Tab; label: string }[] = [
+  { id: "status", label: "状态" },
+  { id: "log", label: "日志" },
+  { id: "settings", label: "设置" },
+];
 
-// Plan identifiers as reported by the CLIs, shown with their product names.
-const PLAN_LABEL: Record<string, string> = {
-  pro: "Pro",
-  max: "Max",
-  team: "Team",
-  enterprise: "Enterprise",
-  plus: "Plus",
-};
+let snap: Snapshot | null = null;
+let tab: Tab = "status";
+let pending = false; // a render waits for the focused input to blur
 
-const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+function headerNote(s: Snapshot): string {
+  if (tab === "settings") return "设置会自动保存";
+  const on = (s.plans ?? []).filter((p) => p.schedule.enabled);
+  if (on.length === 0) return "";
+  const summaries = new Set(on.map((p) => scheduleSummary(p.schedule, p.times)));
+  return summaries.size === 1 ? [...summaries][0]! : `${on.length} 个套餐`;
 }
 
-function homeRelative(path: string, root: string): string {
-  // Shorten /Users/<name>/... to ~/... using the data dir as a hint.
-  const m = root.match(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)/);
-  const home = m?.[1];
-  return home && path.startsWith(home) ? "~" + path.slice(home.length) : path;
+function header(s: Snapshot): HTMLElement {
+  return h("header", { class: "top" },
+    h("div", { class: "row-between" },
+      h("div", { class: "brand" }, h("img", { src: "/chick.svg", alt: "", width: "20", height: "20" }), h("span", { class: "name" }, "Kikri")),
+      h("span", { class: "header-note" }, headerNote(s))),
+    h("nav", { class: "seg tabs", "aria-label": "视图" }, TABS.map((t) => h("button", {
+      type: "button", class: t.id === tab ? "on" : "", "aria-current": t.id === tab ? "page" : undefined,
+      onclick: () => { tab = t.id; render(); },
+    }, t.label))));
 }
 
-function statusChip(t: ToolStatus, detecting: boolean): HTMLElement {
-  if (!t.found) return el("span", "chip", t.error ? "路径无效" : "未安装");
-  if (t.error) return el("span", "chip bad", "检测失败");
-  if (!t.auth) return el("span", "chip", detecting ? "检测中" : "已安装");
-  return t.auth.loggedIn ? el("span", "chip ok", "已登录") : el("span", "chip bad", "未登录");
-}
-
-function expiryNote(auth: AuthInfo): string | null {
-  if (!auth.expiresAt) return null;
-  const ms = Date.parse(auth.expiresAt) - Date.now();
-  if (Number.isNaN(ms)) return null;
-  const days = Math.floor(ms / 86_400_000);
-  if (ms <= 0) return "登录已过期";
-  return days < 3 ? `登录将在 ${Math.max(days, 0)} 天内过期` : null;
-}
-
-function renderTool(t: ToolStatus, snap: Snapshot): HTMLLIElement {
-  const li = el("li", t.found ? "tool" : "tool absent");
-  const head = el("div", "tool-head");
-  head.append(el("span", "tool-name", t.name), statusChip(t, snap.detecting));
-  li.append(head);
-
-  if (t.found) {
-    const parts: string[] = [];
-    if (t.version) parts.push(t.version);
-    if (t.auth?.plan) parts.push(PLAN_LABEL[t.auth.plan] ?? t.auth.plan);
-    if (t.auth?.loggedIn && t.auth.method) parts.push(t.auth.method);
-    if (parts.length) li.append(el("div", "tool-meta", parts.join(" · ")));
-
-    const path = el("div", "tool-meta", homeRelative(t.path ?? "", snap.appDir.root));
-    path.title = `${t.path}（来源：${t.source ? SOURCE_LABEL[t.source] : "—"}）`;
-    li.append(path);
-
-    const expiry = t.auth && expiryNote(t.auth);
-    if (expiry) li.append(el("div", "tool-error", expiry));
+function render(): void {
+  const s = snap;
+  if (!s) return;
+  const root = document.getElementById("app")!;
+  // Re-rendering replaces the inputs; wait while the user is typing in one.
+  const active = document.activeElement;
+  if (active instanceof HTMLInputElement && root.contains(active) && active.type !== "checkbox") {
+    if (!pending) {
+      pending = true;
+      active.addEventListener("blur", () => { pending = false; setTimeout(render, 0); }, { once: true });
+    }
+    return;
   }
-  if (t.error) li.append(el("div", "tool-error", t.error));
-  return li;
-}
+  const scroller = root.querySelector(".scroll");
+  const scrollTop = scroller?.scrollTop ?? 0;
+  const prevTab = root.dataset.tab;
 
-function render(snap: Snapshot): void {
-  $("version").textContent = snap.version;
-  const refresh = $<HTMLButtonElement>("refresh");
-  refresh.disabled = snap.detecting;
-  refresh.textContent = snap.detecting ? "检测中…" : "重新检测";
-
-  const tools = $("tools");
-  const list = snap.report.tools ?? [];
-  if (!snap.detectedOnce) {
-    tools.replaceChildren(el("li", "placeholder", "正在检测…"));
+  if (!s.prefs.onboarded && !s.storeError && !s.appDirError) {
+    root.dataset.tab = "onboarding";
+    root.replaceChildren(renderOnboarding(s, render));
   } else {
-    // Installed tools first, keeping the built-in order otherwise.
-    const sorted = [...list].sort((a, b) => Number(b.found) - Number(a.found));
-    tools.replaceChildren(...sorted.map((t) => renderTool(t, snap)));
+    let view: HTMLElement;
+    if (tab === "log") {
+      loadLog(s, render);
+      view = renderLog(s);
+    } else if (tab === "settings") {
+      view = renderSettings(s, render);
+    } else {
+      view = renderStatus(s, () => { tab = "settings"; render(); });
+    }
+    root.dataset.tab = tab;
+    root.replaceChildren(header(s), view);
   }
-
-  const root = snap.appDir.root;
-  $("appdir").textContent = root ? homeRelative(root, root) : "—";
-  const sandbox = $("sandbox");
-  if (snap.appDirError) {
-    sandbox.textContent = snap.appDirError;
-    sandbox.className = "bad";
-  } else {
-    sandbox.textContent = snap.appDir.sandbox ? "就绪（空目录）" : "—";
-    sandbox.className = "";
-  }
-
-  const sp = snap.report.searchPath;
-  const dirs = sp.dirs ?? [];
-  const pathSource = $("pathsource");
-  if (!snap.detectedOnce) {
-    pathSource.textContent = "—";
-  } else if (sp.loginShellError) {
-    pathSource.textContent = `登录 shell 失败，使用回退路径（${sp.loginShellError}）`;
-    pathSource.className = "bad";
-  } else {
-    const n = dirs.filter((d) => d.source === "login-shell").length;
-    pathSource.textContent = `登录 shell（${n} 个目录）+ 常见路径`;
-    pathSource.className = "";
-  }
-  $("dircount").textContent = String(dirs.length);
-  $("dirs").replaceChildren(
-    ...dirs.map((d) => {
-      const li = el("li", undefined, homeRelative(d.dir, root));
-      li.append(el("span", "src", SOURCE_LABEL[d.source]));
-      return li;
-    }),
-  );
-
-  $("checked").textContent = snap.detectedOnce
-    ? `上次检测：${new Date(snap.report.checkedAt).toLocaleString()}`
-    : "";
-}
-
-async function call<T>(method: string, ...args: unknown[]): Promise<T> {
-  return (await Call.ByName(`${SERVICE}.${method}`, ...args)) as T;
+  const next = root.querySelector(".scroll");
+  if (next && prevTab === root.dataset.tab) next.scrollTop = scrollTop;
 }
 
 async function main(): Promise<void> {
-  Events.On(EVENT_SNAPSHOT, (ev) => render(ev.data as Snapshot));
-  $("refresh").addEventListener("click", () => {
-    void call<Snapshot>("Refresh").then(render);
+  Events.On(EVENT_SNAPSHOT, (ev) => { snap = ev.data as Snapshot; render(); });
+  snap = await call<Snapshot>("Snapshot");
+  render();
+  // Countdowns and "today" labels.
+  setInterval(render, 30_000);
+  document.addEventListener("keydown", (e) => {
+    if (!e.metaKey && !e.ctrlKey) return;
+    const i = ["1", "2", "3"].indexOf(e.key);
+    if (i >= 0 && snap?.prefs.onboarded) { tab = TABS[i]!.id; render(); }
   });
-  render(await call<Snapshot>("Snapshot"));
 }
 
 void main();

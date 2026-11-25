@@ -49,6 +49,8 @@ app: build
 	mkdir -p $(APP)/Contents/Resources
 	cp build/darwin/Kikri.icns $(APP)/Contents/Resources/Kikri.icns
 	sed 's/__VERSION__/$(VERSION)/g' build/darwin/Info.plist > $(APP)/Contents/Info.plist
+	# Ad-hoc signature: unsigned bundles cannot use system notifications.
+	codesign --force --sign - $(APP)
 
 # Re-render tray PNGs and the app icon from build/icons/*.svg (macOS 14+).
 icons:

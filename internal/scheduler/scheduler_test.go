@@ -380,6 +380,25 @@ func TestSetPlanKeepsSinceUnlessScheduleChanges(t *testing.T) {
 	}
 }
 
+func TestOnSlotAndCachedWindows(t *testing.T) {
+	h := newHarness(t, early(at("05:00")))
+	var got []store.SlotState
+	h.e.d.OnSlot = func(_ PlanDef, sl store.Slot, _ wake.Result) { got = append(got, sl.State) }
+	h.results = []wake.Outcome{wake.OutcomeNotLoggedIn}
+	h.tickAt(at("06:30:05"))
+	if len(got) != 1 || got[0] != store.SlotFailed {
+		t.Fatalf("OnSlot states = %v", got)
+	}
+	if w, _ := h.e.CachedWindows("claude"); w != nil {
+		t.Fatal("no successful wake yet")
+	}
+	h.tickAt(atDay("2026-11-27", "06:30:05"))
+	w, when := h.e.CachedWindows("claude")
+	if len(w) != 1 || w[0].Kind != "five_hour" || !when.Equal(atDay("2026-11-27", "06:30:05")) {
+		t.Fatalf("cached = %+v at %s", w, when)
+	}
+}
+
 func TestStatus(t *testing.T) {
 	h := newHarness(t, early(at("05:00")))
 	h.tickAt(at("06:30:05"))

@@ -209,6 +209,13 @@ func (s *Store) LastEntry(plan string, outcomes ...string) (*Entry, error) {
 	return &es[0], nil
 }
 
+// CountEntries counts log rows with the given outcome since t (all plans).
+func (s *Store) CountEntries(outcome string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM wakes WHERE outcome = ? AND started_at >= ?`, outcome, since.Unix()).Scan(&n)
+	return n, err
+}
+
 func (s *Store) queryEntries(q string, args ...any) ([]Entry, error) {
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

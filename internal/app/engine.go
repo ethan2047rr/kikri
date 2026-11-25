@@ -62,7 +62,7 @@ func runWake(ctx context.Context, layout appdir.Layout, toolID string, skip func
 
 // newEngine connects the scheduler to the real CLIs, quota query and
 // session activity.
-func newEngine(layout appdir.Layout, st *store.Store, onChange func()) *scheduler.Engine {
+func newEngine(layout appdir.Layout, st *store.Store, onChange func(), onSlot func(scheduler.PlanDef, store.Slot, wake.Result)) *scheduler.Engine {
 	return scheduler.New(scheduler.Deps{
 		Store: st,
 		Wake: func(ctx context.Context, plan scheduler.PlanDef, skip func(context.Context) (string, bool)) wake.Result {
@@ -85,5 +85,6 @@ func newEngine(layout appdir.Layout, st *store.Store, onChange func()) *schedule
 			return time.Time{}
 		},
 		OnChange: onChange,
+		OnSlot:   onSlot,
 	})
 }

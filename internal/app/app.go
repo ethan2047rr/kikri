@@ -69,6 +69,11 @@ func Run(version string) error {
 			HiddenOnTaskbar: true,
 		},
 	})
+	// Opening the popup refreshes the official usage numbers (at most once
+	// a minute; the query is read-only and never opens a window).
+	popup.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) {
+		go svc.RefreshQuota(false)
+	})
 	// Closing the popup only hides it; Kikri keeps running in the tray.
 	popup.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		popup.Hide()
@@ -92,6 +97,7 @@ func Run(version string) error {
 	})
 	menu.AddSeparator()
 	menu.Add("退出 Kikri").OnClick(func(*application.Context) { app.Quit() })
+	svc.quit = app.Quit
 	tray.SetMenu(menu)
 	tray.AttachWindow(popup).WindowOffset(5)
 
@@ -99,6 +105,7 @@ func Run(version string) error {
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		go func() {
 			svc.Prepare()
+			svc.startNotifications()
 			svc.StartScheduler(schedCtx)
 			svc.Refresh(context.Background())
 		}()

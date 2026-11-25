@@ -81,7 +81,8 @@ func SetPlanFromSpec(spec string) (any, error) {
 	return svc.engine.Status()
 }
 
-// StatusReport handles `kikri -status`: schedules, next slots and the log.
+// StatusReport handles `kikri -status`: schedules, next slots, usage (the
+// read-only Codex query and Claude's cached windows) and the log.
 func StatusReport() (any, error) {
 	svc, err := openService()
 	if err != nil {
@@ -100,8 +101,9 @@ func StatusReport() (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	svc.RefreshQuota(true)
 	return map[string]any{"plans": plans, "cutoff": settings.Cutoff, "useActivity": settings.UseActivity,
-		"pausedUntil": settings.PausedUntil, "log": log}, nil
+		"pausedUntil": settings.PausedUntil, "usage": svc.Snapshot().Quota, "log": log}, nil
 }
 
 func openService() (*Service, error) {

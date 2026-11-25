@@ -114,6 +114,9 @@ type Deps struct {
 	LastActivity func(plan PlanDef) time.Time
 	// OnChange is called after anything the UI shows has changed.
 	OnChange func()
+	// OnSlot is called after a scheduled wake attempt with the slot's new
+	// state, e.g. to notify the user when it ends up failed.
+	OnSlot func(plan PlanDef, slot store.Slot, res wake.Result)
 
 	Now func() time.Time
 	Loc *time.Location
@@ -356,6 +359,9 @@ func (e *Engine) tickPlan(ctx context.Context, def PlanDef, p schedule.Plan, s S
 		next.State = store.SlotFailed
 	}
 	_ = e.d.Store.PutSlot(next, now)
+	if e.d.OnSlot != nil {
+		e.d.OnSlot(def, next, res)
+	}
 
 	// While offline the slot is re-probed every minute; log only the first.
 	repeat := rec.State == store.SlotPending && (res.Outcome == wake.OutcomeOffline || res.Outcome == wake.OutcomeBusy)
@@ -443,6 +449,15 @@ func (e *Engine) smartSkip(def PlanDef, s Settings) func(context.Context) (strin
 
 // fiveHour extracts the cached 5-hour window from a logged wake result.
 func fiveHour(e *store.Entry) *wake.Window {
+	for _, w := range windowsOf(e) {
+		if w.Kind == "five_hour" && !w.ResetsAt.IsZero() {
+			return &w
+		}
+	}
+	return nil
+}
+
+func windowsOf(e *store.Entry) []wake.Window {
 	if e == nil || len(e.Result) == 0 {
 		return nil
 	}
@@ -450,12 +465,18 @@ func fiveHour(e *store.Entry) *wake.Window {
 	if json.Unmarshal(e.Result, &r) != nil {
 		return nil
 	}
-	for i := range r.Windows {
-		if r.Windows[i].Kind == "five_hour" && !r.Windows[i].ResetsAt.IsZero() {
-			return &r.Windows[i]
-		}
+	return r.Windows
+}
+
+// CachedWindows returns the quota windows reported by the plan's last
+// successful wake (Claude has no read-only query, so this is all there is),
+// and when that wake happened.
+func (e *Engine) CachedWindows(planID string) ([]wake.Window, time.Time) {
+	last, err := e.d.Store.LastEntry(planID, string(wake.OutcomeOK))
+	if err != nil || last == nil {
+		return nil, time.Time{}
 	}
-	return nil
+	return windowsOf(last), last.StartedAt
 }
 
 // PlanStatus is what the UI shows per plan.

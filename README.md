@@ -25,7 +25,7 @@ make diagnose   # 不启动界面，以 JSON 打印环境探测结果
 ./bin/kikri -wake claude -dry-run   # 打印将要执行的唤醒命令，不发送
 ./bin/kikri -wake codex             # 真的发一次唤醒并打印结果（会开启该套餐的 5 小时窗口）
 ./bin/kikri -plan claude=early-bird # 设置排班：early-bird / three / 06:30,11:35 / off（默认工作日）
-./bin/kikri -status                 # 打印排班、下次唤醒时间和最近的日志
+./bin/kikri -status                 # 打印排班、下次唤醒时间、额度用量和最近的日志
 ```
 
 - `KIKRI_HOME=<dir>`：改用别的数据目录（默认 macOS 为 `~/Library/Application Support/Kikri`，Windows 为 `%AppData%\Kikri`）
@@ -35,7 +35,7 @@ make diagnose   # 不启动界面，以 JSON 打印环境探测结果
 
 ```
 main.go              入口（-diagnose / -wake / -plan / -status / -version）
-internal/app         Wails 应用：托盘、弹出窗口、前端调用的 Service
+internal/app         Wails 应用：托盘、弹出窗口、前端调用的 Service、通知
 internal/detect      CLI 路径探测（登录 shell → 进程 PATH → 常见路径）、版本、登录状态
 internal/appdir      数据目录与空的 sandbox 目录
 internal/wake        唤醒执行器：隔离命令、输出解析、错误分类、网络探测、文件锁
@@ -45,7 +45,9 @@ internal/store       SQLite：设置、每个时间点的状态、唤醒日志
 internal/quota       Codex 额度只读查询（app-server）
 internal/activity    会话文件修改时间（只读 mtime，不读内容）
 internal/proc        子进程：stdin 接空设备、强制超时、杀掉整个进程组
+internal/autostart   开机自启（macOS LaunchAgent / Windows 注册表 Run）
 internal/gui/assets  前端静态文件（app.js 由 frontend/ 编译生成）
+frontend/src         弹出窗口：状态、日志、设置、首次引导（TypeScript，无框架）
 frontend/            TypeScript 源码（esbuild 打包，tsc 类型检查）
 build/darwin         Info.plist（LSUIElement：只在菜单栏显示）
 ```

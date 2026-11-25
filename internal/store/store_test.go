@@ -98,4 +98,10 @@ func TestEntries(t *testing.T) {
 	if none, _ := s.LastEntry("claude", "quota_exhausted"); none != nil {
 		t.Fatal("unexpected entry")
 	}
+	if n, err := s.CountEntries("ok", base.Add(-time.Hour)); err != nil || n != 2 {
+		t.Fatalf("count ok = %d, %v", n, err)
+	}
+	if n, _ := s.CountEntries("ok", base.Add(time.Second)); n != 0 {
+		t.Fatalf("count since later = %d", n)
+	}
 }
