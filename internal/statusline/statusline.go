@@ -71,18 +71,41 @@ func DefaultPaths(kikriRoot string) (Paths, error) {
 	}, nil
 }
 
-// Command is the statusLine command that runs exe as the relay.
-func Command(exe string) string {
+// Command is the statusLine command that runs exe as the relay. On Unix,
+// when exe is gone (the app was deleted without turning the option off) it
+// runs the user's original command (fallback, "" for none) instead, so their
+// status line keeps working:
+//
+//	[ -x '/Applications/Kikri.app/.../kikri' ] && exec '/Applications/...' -statusline; <original>
+func Command(exe, fallback string) string {
 	if runtime.GOOS == "windows" {
 		return `"` + exe + `" -` + Flag
 	}
-	return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "' -" + Flag
+	q := "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
+	relay := q + " -" + Flag
+	if fallback == "" {
+		return relay
+	}
+	return "[ -x " + q + " ] && exec " + relay + "; " + fallback
 }
 
 // isRelay reports whether a statusLine command is a Kikri relay (from any
 // install location).
 func isRelay(cmd string) bool {
-	return strings.HasSuffix(cmd, " -"+Flag) && strings.Contains(strings.ToLower(cmd), "kikri")
+	return strings.Contains(cmd, " -"+Flag) && strings.Contains(strings.ToLower(cmd), "kikri")
+}
+
+// originalCommand is the user's own status line command from the backup.
+func originalCommand(backupPath string) string {
+	orig, err := readBackup(backupPath)
+	if err != nil || orig == nil {
+		return ""
+	}
+	var sl statusLine
+	if json.Unmarshal(orig, &sl) != nil || isRelay(sl.Command) {
+		return ""
+	}
+	return sl.Command
 }
 
 type statusLine struct {
@@ -117,7 +140,7 @@ func Status(p Paths, exe string) (State, error) {
 	if json.Unmarshal(raw, &sl) != nil || !isRelay(sl.Command) {
 		return State{}, nil
 	}
-	return State{Installed: true, Stale: sl.Command != Command(exe)}, nil
+	return State{Installed: true, Stale: sl.Command != Command(exe, originalCommand(p.Backup))}, nil
 }
 
 // Install puts the relay in front of the user's status line. Re-installing
@@ -136,7 +159,11 @@ func Install(p Paths, exe string) error {
 	}
 	var cur statusLine
 	_ = json.Unmarshal(raw, &cur)
+	fallback := ""
 	if !isRelay(cur.Command) {
+		if had && cur.Type == "command" {
+			fallback = cur.Command
+		}
 		orig := json.RawMessage("null")
 		if had {
 			orig = raw
@@ -145,10 +172,12 @@ func Install(p Paths, exe string) error {
 		if err := writeAtomic(p.Backup, b, 0o600); err != nil {
 			return fmt.Errorf("back up statusLine: %w", err)
 		}
+	} else {
+		fallback = originalCommand(p.Backup)
 	}
 	// Keep the user's other statusLine options (padding, refreshInterval...).
 	sl.set("type", marshal("command"))
-	sl.set("command", marshal(Command(exe)))
+	sl.set("command", marshal(Command(exe, fallback)))
 	val, _ := sl.MarshalJSON()
 	keys.set("statusLine", val)
 	return writeObject(p.Settings, keys)

@@ -1,0 +1,55 @@
+# Builds the macOS and Windows archives. Runs only when a v* tag is pushed
+# (or by hand), so the repository's macOS runner minutes are spent on
+# releases alone. A tag produces a draft release to review and publish.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs the tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Test
+        run: |
+          make frontend typecheck
+          go vet ./...
+          go test ./...
+
+      - name: Build archives
+        run: make dist
+
+      - name: Upload archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: kikri-${{ github.ref_name }}
+          path: bin/dist/*
+          if-no-files-found: error
+
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" bin/dist/* \
+            --draft --verify-tag --generate-notes --title "Kikri $GITHUB_REF_NAME"

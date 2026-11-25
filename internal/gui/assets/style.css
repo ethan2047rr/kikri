@@ -396,8 +396,9 @@ b { font-weight: 600; color: var(--ink); }
 .test-line { display: flex; flex-direction: column; gap: 1px; }
 .ok-text { color: var(--ok); font-weight: 600; }
 .bad-text { color: var(--bad); font-weight: 600; }
-.check { display: flex; align-items: center; gap: 8px; color: var(--soft); }
-.check input { margin: 0; accent-color: var(--primary); }
+.check { display: flex; align-items: flex-start; gap: 8px; color: var(--soft); }
+/* Centred on the first line of the label, which may wrap. */
+.check input { margin: 3px 0 0; flex: none; accent-color: var(--primary); }
 
 /* Toast */
 .toast {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -79,7 +80,7 @@ func TestInstallAndUninstallRestoresOriginal(t *testing.T) {
 		StatusLine map[string]any `json:"statusLine"`
 	}
 	_ = json.Unmarshal([]byte(got), &s)
-	if s.StatusLine["command"] != Command(exe) || s.StatusLine["padding"] != 2.0 {
+	if s.StatusLine["command"] != Command(exe, `echo "$(cat | wc -c)" && printf '<ok>'`) || s.StatusLine["padding"] != 2.0 {
 		t.Fatalf("statusLine = %v", s.StatusLine)
 	}
 	if st, _ := Status(p, exe); !st.Installed || st.Stale {
@@ -236,10 +237,45 @@ func TestCommandQuoting(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip()
 	}
-	if got := Command("/a b/it's/kikri"); got != `'/a b/it'\''s/kikri' -statusline` {
+	if got := Command("/a b/it's/kikri", ""); got != `'/a b/it'\''s/kikri' -statusline` {
 		t.Fatal(got)
 	}
-	if !isRelay(Command("/Applications/Kikri.app/Contents/MacOS/kikri")) || isRelay("echo hi") {
+	if got := Command("/k/kikri", "my-line"); got != `[ -x '/k/kikri' ] && exec '/k/kikri' -statusline; my-line` {
+		t.Fatal(got)
+	}
+	if !isRelay(Command("/Applications/Kikri.app/Contents/MacOS/kikri", "x")) || isRelay("echo hi") {
 		t.Fatal("isRelay")
+	}
+}
+
+// The app deleted without turning the option off: the command falls back to
+// the user's own status line, with the same input.
+func TestCommandFallsBackWhenAppIsGone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip()
+	}
+	p := paths(t, `{"statusLine":{"type":"command","command":"cat | wc -c | tr -d ' '"}}`)
+	gone := filepath.Join(t.TempDir(), "Kikri.app", "kikri")
+	if err := Install(p, gone); err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		StatusLine statusLine `json:"statusLine"`
+	}
+	_ = json.Unmarshal([]byte(read(t, p.Settings)), &s)
+	in := `{"model":{"id":"x"}}`
+	cmd := exec.Command("/bin/sh", "-c", s.StatusLine.Command)
+	cmd.Stdin = strings.NewReader(in)
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != strconv.Itoa(len(in)) {
+		t.Fatalf("out=%q err=%v (command %q)", out, err, s.StatusLine.Command)
+	}
+	// Re-installing from another path keeps the same fallback.
+	if err := Install(p, "/k/kikri"); err != nil {
+		t.Fatal(err)
+	}
+	_ = json.Unmarshal([]byte(read(t, p.Settings)), &s)
+	if !strings.HasSuffix(s.StatusLine.Command, "; cat | wc -c | tr -d ' '") {
+		t.Fatal(s.StatusLine.Command)
 	}
 }

@@ -12,7 +12,7 @@ export CGO_CFLAGS  := -mmacosx-version-min=13.0
 export CGO_LDFLAGS := -mmacosx-version-min=13.0
 endif
 
-.PHONY: all frontend typecheck build run diagnose test vet app windows clean icons
+.PHONY: all frontend typecheck build run diagnose test vet app windows clean icons dist dist-mac dist-windows
 
 all: build
 
@@ -61,6 +61,33 @@ icons:
 # Windows GUI binary (no console window), cross-compiled without cgo.
 windows: frontend
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS) -H windowsgui" -o $(BIN)/kikri.exe .
+
+# Release archives in bin/dist (CI runs these on a macOS runner).
+DIST := $(BIN)/dist
+
+# Universal (Apple silicon + Intel) Kikri.app, zipped with ditto so the
+# bundle's attributes and ad-hoc signature survive.
+dist-mac: frontend
+	rm -rf $(APP) $(DIST)/Kikri-*-macos.zip
+	mkdir -p $(DIST)
+	CGO_ENABLED=1 GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/kikri-arm64 .
+	CGO_ENABLED=1 GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/kikri-amd64 .
+	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
+	# Not bin/kikri: go build refuses to overwrite a universal binary.
+	lipo -create -output $(APP)/Contents/MacOS/kikri $(BIN)/kikri-arm64 $(BIN)/kikri-amd64
+	rm $(BIN)/kikri-arm64 $(BIN)/kikri-amd64
+	cp build/darwin/Kikri.icns $(APP)/Contents/Resources/Kikri.icns
+	sed 's/__VERSION__/$(VERSION)/g' build/darwin/Info.plist > $(APP)/Contents/Info.plist
+	codesign --force --sign - $(APP)
+	ditto -c -k --keepParent $(APP) $(DIST)/Kikri-$(VERSION)-macos.zip
+
+dist-windows: windows
+	rm -f $(DIST)/Kikri-*-windows-amd64.zip
+	mkdir -p $(DIST)
+	cd $(BIN) && zip -q -X dist/Kikri-$(VERSION)-windows-amd64.zip kikri.exe
+
+dist: dist-mac dist-windows
+	cd $(DIST) && shasum -a 256 Kikri-$(VERSION)-* > SHA256SUMS.txt
 
 clean:
 	rm -rf $(BIN) internal/gui/assets/app.js
