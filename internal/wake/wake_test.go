@@ -92,16 +92,18 @@ func TestCodexParse(t *testing.T) {
 }
 
 func TestCodexCommand(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir()) // no model cache: default model, effort low
 	l := appdir.Layout{Sandbox: "/data/sandbox", CodexInstructions: `C:\Users\a "b"\codex.md`}
 	args, env := Codex{}.Command(l)
-	if env != nil || args[0] != "exec" || args[len(args)-1] != "reply ok" {
+	if env != nil || args[0] != "exec" || args[len(args)-1] != "ok" || slices.Contains(args, "-m") {
 		t.Fatalf("args = %v", args)
 	}
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
 		"--ignore-user-config", "--ignore-rules", "--ephemeral", "--json", "-C /data/sandbox",
 		`model_instructions_file="C:\\Users\\a \"b\"\\codex.md"`, "project_doc_max_bytes=0",
-		"--disable unbounded_connection_retries", "--disable shell_tool",
+		"--disable unbounded_connection_retries", "--disable shell_tool", `model_reasoning_effort="low"`,
+		"agents.enabled=false", "skills.bundled.enabled=false",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in %s", want, joined)
@@ -110,6 +112,38 @@ func TestCodexCommand(t *testing.T) {
 	args, _ = Codex{Disable: []string{}, Config: []string{}}.Command(l)
 	if slices.Contains(args, "--disable") {
 		t.Fatal("empty Disable must add no --disable flags")
+	}
+}
+
+func TestCheapestCodexModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	cache := `{"models":[
+	 {"slug":"gpt-6.2-sol","supported_reasoning_levels":[{"effort":"low"},{"effort":"high"}]},
+	 {"slug":"gpt-5.6-luna","supported_reasoning_levels":[{"effort":"low"}]},
+	 {"slug":"gpt-6-luna","supported_reasoning_levels":[{"effort":"medium"},{"effort":"minimal"},{"effort":"high"}]}]}`
+	os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(cache), 0o600)
+	if m, e := CheapestCodexModel("low"); m != "gpt-6-luna" || e != "minimal" {
+		t.Fatalf("got %q %q", m, e)
+	}
+	args, _ := Codex{}.Command(appdir.Layout{Sandbox: "/s", CodexInstructions: "/i"})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-m gpt-6-luna") || !strings.Contains(joined, `model_reasoning_effort="minimal"`) {
+		t.Fatalf("args = %s", joined)
+	}
+
+	os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-7-nova"}]}`), 0o600)
+	if m, e := CheapestCodexModel("low"); m != "" || e != "low" {
+		t.Fatalf("unknown models must fall back to the default: %q %q", m, e)
+	}
+	os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(`not json`), 0o600)
+	if m, _ := CheapestCodexModel("low"); m != "" {
+		t.Fatal("broken cache must fall back to the default")
+	}
+	// An explicit choice wins.
+	args, _ = Codex{Model: "gpt-6.2-sol", Effort: "high"}.Command(appdir.Layout{})
+	if j := strings.Join(args, " "); !strings.Contains(j, "-m gpt-6.2-sol") || !strings.Contains(j, `model_reasoning_effort="high"`) {
+		t.Fatalf("override ignored: %s", j)
 	}
 }
 

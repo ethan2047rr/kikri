@@ -28,8 +28,14 @@ var DefaultCodexDisable = []string{
 // DefaultCodexConfig holds extra `-c key=value` overrides. project_doc_max_bytes=0
 // stops AGENTS.md in the working directory from loading (about 3.5k tokens);
 // the include_* switches trim another ~260 tokens (7,906 -> 7,644).
+//
+// agents.enabled=false drops the multi-agent tools and instructions (about
+// 9.9 KB of prompt) and skills.bundled.enabled=false the bundled skill list
+// (about 2.5 KB); multi_agent=false alone leaves both in (Codex 0.171.0,
+// measured with `codex debug prompt-input`).
 var DefaultCodexConfig = []string{
-	`model_reasoning_effort="low"`,
+	"agents.enabled=false",
+	"skills.bundled.enabled=false",
 	"project_doc_max_bytes=0",
 	"include_apps_instructions=false",
 	"include_apps_usage_instructions=false",
@@ -44,6 +50,8 @@ var DefaultCodexConfig = []string{
 type Codex struct {
 	Disable []string // nil means DefaultCodexDisable
 	Config  []string // nil means DefaultCodexConfig
+	// Model and Effort override the automatic choice (CheapestCodexModel).
+	Model, Effort string
 }
 
 func (Codex) ID() string { return "codex" }
@@ -62,6 +70,17 @@ func (c Codex) Command(l appdir.Layout) (args, env []string) {
 		// Replaces the built-in base instructions: the biggest token saving.
 		"-c", "model_instructions_file=" + tomlString(l.CodexInstructions),
 	}
+	model, effort := c.Model, c.Effort
+	if model == "" {
+		model, effort = CheapestCodexModel(effort)
+	}
+	if model != "" {
+		args = append(args, "-m", model)
+	}
+	if effort == "" {
+		effort = "low"
+	}
+	args = append(args, "-c", "model_reasoning_effort="+tomlString(effort))
 	cfg := c.Config
 	if cfg == nil {
 		cfg = DefaultCodexConfig
@@ -76,7 +95,67 @@ func (c Codex) Command(l appdir.Layout) (args, env []string) {
 	for _, f := range dis {
 		args = append(args, "--disable", f)
 	}
-	return append(args, "reply ok"), nil
+	return append(args, "ok"), nil
+}
+
+// codexModelPreference lists the cheapest Codex models, best first. A wake
+// only needs to open the window, and these use a small fraction of the quota
+// per message (Plus estimate: Luna 350-3,000 messages per 5h vs Sol 15-160;
+// docs/research/minimal-tokens.md).
+var codexModelPreference = []string{"gpt-6-luna", "gpt-5.6-luna"}
+
+// effortRank orders reasoning levels from cheapest to most expensive.
+var effortRank = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// CheapestCodexModel picks the cheapest model this Codex install offers and
+// its lowest reasoning level, from Codex's own model list cache
+// ($CODEX_HOME/models_cache.json, no credentials in it). When the cache is
+// missing or lists none of the preferred models, model is "" and Codex uses
+// its default model; effort is then the given fallback.
+func CheapestCodexModel(fallbackEffort string) (model, effort string) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return "", fallbackEffort
+		}
+		home = filepath.Join(h, ".codex")
+	}
+	b, err := os.ReadFile(filepath.Join(home, "models_cache.json"))
+	if err != nil {
+		return "", fallbackEffort
+	}
+	var cache struct {
+		Models []struct {
+			Slug   string `json:"slug"`
+			Levels []struct {
+				Effort string `json:"effort"`
+			} `json:"supported_reasoning_levels"`
+		} `json:"models"`
+	}
+	if json.Unmarshal(b, &cache) != nil {
+		return "", fallbackEffort
+	}
+	for _, want := range codexModelPreference {
+		for _, m := range cache.Models {
+			if m.Slug != want {
+				continue
+			}
+			best := -1
+			for _, l := range m.Levels {
+				for i, name := range effortRank {
+					if l.Effort == name && (best < 0 || i < best) {
+						best = i
+					}
+				}
+			}
+			if best < 0 {
+				return m.Slug, fallbackEffort
+			}
+			return m.Slug, effortRank[best]
+		}
+	}
+	return "", fallbackEffort
 }
 
 // tomlString quotes s as a TOML basic string (Windows paths have backslashes).
