@@ -1,4 +1,5 @@
 import { Events } from "/wails/runtime.js";
+import { L, setLang } from "./i18n";
 import { loadLog, renderLog } from "./log";
 import { renderOnboarding } from "./onboarding";
 import { renderSettings } from "./settings";
@@ -12,7 +13,6 @@ const EVENT_SNAPSHOT = "kikri:snapshot";
 // log behind a row in settings.
 type Page = "status" | "settings" | "log";
 const PARENT: Record<Page, Page | null> = { status: null, settings: "status", log: "settings" };
-const TITLE: Record<Page, string> = { status: "Kikri", settings: "设置", log: "唤醒记录" };
 
 let snap: Snapshot | null = null;
 let page: Page = "status";
@@ -28,21 +28,22 @@ const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke
 function header(): HTMLElement {
   const parent = PARENT[page];
   if (!parent) {
-    const gear = h("button", { type: "button", class: "icon-btn", "aria-label": "设置", title: "设置 (⌘,)", onclick: () => go("settings") });
+    const gear = h("button", { type: "button", class: "icon-btn", "aria-label": L.settingsButton, title: L.settingsShortcut, onclick: () => go("settings") });
     gear.innerHTML = GEAR; // static markup
     return h("header", { class: "top row-between" },
       h("div", { class: "brand" }, h("img", { src: "/chick.svg", alt: "", width: "20", height: "20" }), h("span", { class: "name" }, "Kikri")),
       gear);
   }
   return h("header", { class: "top row-between" },
-    h("button", { type: "button", class: "back", "aria-label": `返回${TITLE[parent] === "Kikri" ? "状态" : TITLE[parent]}`, onclick: () => go(parent) },
-      h("span", { class: "chevron", "aria-hidden": "true" }, "‹"), h("span", { class: "name" }, TITLE[page])),
-    page === "settings" && h("span", { class: "header-note" }, "设置会自动保存"));
+    h("button", { type: "button", class: "back", "aria-label": L.back(parent === "status" ? L.backStatus : L.title[parent]), onclick: () => go(parent) },
+      h("span", { class: "chevron", "aria-hidden": "true" }, "‹"), h("span", { class: "name" }, L.title[page])),
+    page === "settings" && h("span", { class: "header-note" }, L.autosave));
 }
 
 function render(): void {
   const s = snap;
   if (!s) return;
+  setLang(s.lang === "en" ? "en" : "zh");
   const root = document.getElementById("app")!;
   // Re-rendering replaces the inputs; wait while the user is typing in one.
   const active = document.activeElement;

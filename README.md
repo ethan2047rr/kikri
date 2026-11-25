@@ -1,100 +1,120 @@
 # Kikri
 
-> Kikri 是 Kikiriki 的简写，即西班牙语中的公鸡打鸣声。
+**English** | [中文](README.zh-CN.md)
 
-一个开源免费的菜单栏 / 系统托盘小工具：每天按排班自动给 AI 编程工具（Claude Code、Codex CLI 等）发一条极小的请求，**提前开启 5 小时额度窗口**，让第二轮窗口更早刷新。
+> Kikri is short for *kikiriki*, the rooster's crow in Spanish.
 
-- 只调用你本机已登录的官方 CLI，不读取、不复制、不上传任何凭证
-- 隔离运行：一次唤醒约 633 tokens（Claude）/ 约 7.9k tokens（Codex）
-- 睡眠、断网后按规则补发；用官方额度数据跳过已经在跑的窗口
-- macOS + Windows，Go + Wails v3
+A free, open-source menu bar / system tray app. On a schedule you choose, it sends a tiny request to your AI coding tools (Claude Code, Codex CLI) so their **5-hour usage window starts early**, and the next window refreshes sooner.
 
-> 状态：v0.1 准备发布。macOS 上已日常使用；Windows 版能编译，但还没在真机上验证。
+- Runs only the official CLIs you are already signed in to. It never reads, copies or uploads credentials
+- Isolated and cheap: about 633 tokens per wake for Claude, about 5.2k for Codex
+- Makes up wakes missed while the computer slept or was offline; skips a wake when official usage data shows a window is already running
+- Shows when each window resets and how much of it you have used
+- macOS and Windows, English and Chinese. Built with Go and Wails v3
 
-## 安装
+> Status: v0.1 is about to be released. Used daily on macOS; the Windows build compiles but has not been tested on a real machine yet.
 
-先装好并登录 [Claude Code](https://code.claude.com) 或 [Codex CLI](https://github.com/openai/codex)（至少一个）。Kikri 只调用它们，不需要任何密钥。
+## How it works
 
-### macOS（13 及以上，Apple 芯片和 Intel 通用）
+Claude and ChatGPT plans meter usage in 5-hour windows that start with your first request. If you start work at 09:00, your first window runs until 14:00. If Kikri wakes the plan at 06:30, the window resets at 11:30 instead, and your next full window starts in the middle of your working day.
 
-1. 从 [Releases](../../releases) 下载 `Kikri-<版本>-macos.zip`，解压后把 **Kikri.app** 拖进「应用程序」。
-2. 第一次打开时，系统会提示「无法验证开发者」：Kikri 没有付费的 Apple 开发者证书（只做了本机签名）。
-   - 点「完成」，然后打开 **系统设置 → 隐私与安全性**，滚到底部，在 Kikri 那一行点 **「仍要打开」**。
-   - 或者在终端运行：`xattr -dr com.apple.quarantine /Applications/Kikri.app`
-3. Kikri 只在菜单栏显示（一只小鸡），没有 Dock 图标。点它，按引导选好唤醒时间即可。
+Each wake runs the CLI in an empty folder (so no project files are sent), asks for a one-word reply without saving a session, and logs the result.
 
-### Windows（10 / 11）
+## Install
 
-1. 从 [Releases](../../releases) 下载 `Kikri-<版本>-windows-amd64.zip`，解压到一个固定的位置（比如 `%LocalAppData%\Programs\Kikri`）。
-2. 双击 `kikri.exe`。SmartScreen 提示「Windows 已保护你的电脑」时，点 **「更多信息」→「仍要运行」**（程序没有代码签名证书）。
-3. Kikri 在任务栏右下角的托盘里。界面使用系统自带的 WebView2（Windows 11 自带；Windows 10 装了新版 Edge 就有）。
+Install and sign in to [Claude Code](https://code.claude.com) or [Codex CLI](https://github.com/openai/codex) (at least one). Kikri only runs them; it needs no API keys.
 
-### 校验下载
+### macOS (13 or later, Apple silicon and Intel)
 
-每个 Release 附带 `SHA256SUMS.txt`：
+1. Download `Kikri-<version>-macos.zip` from [Releases](../../releases), unzip it and drag **Kikri.app** into Applications.
+2. The first time you open it, macOS says it can't verify the developer: Kikri has no paid Apple Developer ID (it is signed ad hoc).
+   - Click **Done**, open **System Settings → Privacy & Security**, scroll to the bottom and click **Open Anyway** next to Kikri.
+   - Or run in Terminal: `xattr -dr com.apple.quarantine /Applications/Kikri.app`
+3. Kikri lives in the menu bar (a small chick) and has no Dock icon. Click it and follow the setup to pick your wake times.
+
+### Windows (10 / 11)
+
+1. Download `Kikri-<version>-windows-amd64.zip` from [Releases](../../releases) and unzip it to a permanent folder, such as `%LocalAppData%\Programs\Kikri`.
+2. Double-click `kikri.exe`. When SmartScreen says "Windows protected your PC", click **More info → Run anyway** (the app has no code-signing certificate).
+3. Kikri sits in the system tray at the bottom right. Its window uses the built-in WebView2 (included in Windows 11; on Windows 10 it comes with a current Edge).
+
+### Verify the download
+
+Each release includes `SHA256SUMS.txt`:
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt --ignore-missing   # macOS
 ```
 
 ```powershell
-Get-FileHash .\Kikri-<版本>-windows-amd64.zip -Algorithm SHA256   # Windows，和 SHA256SUMS.txt 对照
+Get-FileHash .\Kikri-<version>-windows-amd64.zip -Algorithm SHA256   # Windows: compare with SHA256SUMS.txt
 ```
 
-## 卸载
+## Claude Code status line
 
-1. 打开 Kikri → 设置，**先关掉「读取 Claude Code 状态栏」**（会把 `~/.claude/settings.json` 的状态栏还原成你原来的样子），再关掉「开机自启」。忘了关就删了 App 也不要紧：macOS 上状态栏命令会自动退回到你原来的命令，只是 settings.json 里还留着 Kikri 那一段。
-2. 退出 Kikri，删除 Kikri.app（Windows 删除解压的文件夹）。
-3. 删除数据目录：macOS `~/Library/Application Support/Kikri`，Windows `%AppData%\Kikri`。
+Claude has no read-only usage query. The only official source of the reset time is the data Claude Code passes to its status line. By default Kikri puts a small relay in front of your status line command in `~/.claude/settings.json`:
 
-## 开发
+- It saves only the rate limits (5-hour and weekly usage and reset times), then runs your original command with the same input, so your status line looks the same.
+- If you had no status line, Kikri shows a short one: `5h 23% · resets 18:30 · week 54%`.
+- Your original setting is backed up. Turning the option off in Settings restores it.
 
-需要 Go 1.27+ 和 Node.js（只用于编译 TypeScript 前端）。
+You can untick it during setup or turn it off later. Without it, Kikri estimates the reset time from when you last used Claude Code.
+
+## Uninstall
+
+1. Open Kikri → Settings. **First turn off "Read Claude Code's status line"** (this restores your original status line in `~/.claude/settings.json`), then turn off "Start at login". If you delete the app without doing this, on macOS the status line command falls back to your original one automatically, but Kikri's part stays in settings.json.
+2. Quit Kikri and delete Kikri.app (on Windows, delete the unzipped folder).
+3. Delete the data folder: `~/Library/Application Support/Kikri` on macOS, `%AppData%\Kikri` on Windows.
+
+## Development
+
+Requires Go 1.27+ and Node.js (only to build the TypeScript frontend).
 
 ```bash
-make run        # 编译并启动托盘应用
-make app        # 打包 bin/Kikri.app（macOS，未签名）
-make windows    # 交叉编译 bin/kikri.exe
-make dist       # 发布用压缩包：通用 Kikri.app、Windows exe、SHA256SUMS（在 bin/dist）
-make test vet   # Go 测试、go vet、TypeScript 类型检查
-make diagnose   # 不启动界面，以 JSON 打印环境探测结果
+make run        # build and start the tray app
+make app        # build bin/Kikri.app (macOS, signed ad hoc)
+make windows    # cross-compile bin/kikri.exe
+make dist       # release archives: universal Kikri.app, Windows exe, SHA256SUMS (in bin/dist)
+make test vet   # Go tests, go vet, TypeScript type check
+make diagnose   # print environment detection as JSON, without the UI
 
-./bin/kikri -wake claude -dry-run   # 打印将要执行的唤醒命令，不发送
-./bin/kikri -wake codex             # 真的发一次唤醒并打印结果（会开启该套餐的 5 小时窗口）
-./bin/kikri -plan claude=early-bird # 设置排班：early-bird / three / 06:30,11:35 / off（默认工作日）
-./bin/kikri -status                 # 打印排班、下次唤醒时间、额度用量和最近的日志
+./bin/kikri -wake claude -dry-run   # print the wake command without sending it
+./bin/kikri -wake codex             # send one real wake and print the result (starts that plan's 5-hour window)
+./bin/kikri -plan claude=early-bird # set a schedule: early-bird / three / 06:30,11:35 / off (weekdays by default)
+./bin/kikri -status                 # print schedules, next wakes, usage and the recent log
 ```
 
-- `KIKRI_HOME=<dir>`：改用别的数据目录（默认 macOS 为 `~/Library/Application Support/Kikri`，Windows 为 `%AppData%\Kikri`）
-- `KIKRI_DEBUG=1`：打开 Wails 调试日志
+- `KIKRI_HOME=<dir>`: use another data folder (default `~/Library/Application Support/Kikri` on macOS, `%AppData%\Kikri` on Windows)
+- `KIKRI_DEBUG=1`: turn on Wails debug logging
 
-目录结构：
+Layout:
 
 ```
-main.go              入口（-diagnose / -wake / -plan / -status / -version）
-internal/app         Wails 应用：托盘、弹出窗口、前端调用的 Service、通知
-internal/detect      CLI 路径探测（登录 shell → 进程 PATH → 常见路径）、版本、登录状态
-internal/appdir      数据目录与空的 sandbox 目录
-internal/wake        唤醒执行器：隔离命令、输出解析、错误分类、网络探测、文件锁
-internal/schedule    排班：预设、工作日、时间点、补发截止时间（纯函数）
-internal/scheduler   调度引擎：每 30 秒检查、补发、重试、Smart Skip、暂停今日、日志
-internal/store       SQLite：设置、每个时间点的状态、唤醒日志
-internal/quota       Codex 额度只读查询（app-server）
-internal/activity    会话文件修改时间（只读 mtime，不读内容）
-internal/statusline  从 Claude Code 状态栏数据读取 Claude 的刷新时间（默认打开，设置里关掉即还原）
-internal/proc        子进程：stdin 接空设备、强制超时、杀掉整个进程组
-internal/autostart   开机自启（macOS LaunchAgent / Windows 注册表 Run）
-internal/gui/assets  前端静态文件（app.js 由 frontend/ 编译生成）
-frontend/src         弹出窗口：状态、日志、设置、首次引导（TypeScript，无框架）
-frontend/            TypeScript 源码（esbuild 打包，tsc 类型检查）
-build/darwin         Info.plist（LSUIElement：只在菜单栏显示）
-.github/workflows    推送 v* 标签时构建两个平台的压缩包，生成 Release 草稿
+main.go              entry point (-diagnose / -wake / -plan / -status / -version)
+internal/app         Wails app: tray, popup window, the Service the frontend calls, notifications
+internal/detect      finding the CLIs (login shell → process PATH → common paths), versions, sign-in state
+internal/appdir      data folder and the empty sandbox directory
+internal/wake        wake runner: isolated command, output parsing, error classes, network probe, file lock
+internal/schedule    schedules: presets, weekdays, times, make-up deadline (pure functions)
+internal/scheduler   engine: checks every 30 s, make-up, retries, Smart Skip, pause today, log
+internal/store       SQLite: settings, per-slot state, wake log
+internal/quota       read-only Codex usage query (app-server)
+internal/activity    session file modification times (mtime only, never contents)
+internal/statusline  Claude's reset time from Claude Code's status line (on by default; turning it off restores yours)
+internal/locale      UI language: the system's, or the user's choice
+internal/proc        child processes: stdin from the null device, hard timeouts, killing the whole process group
+internal/autostart   start at login (macOS LaunchAgent / Windows registry Run key)
+internal/gui/assets  static frontend files (app.js is built from frontend/)
+frontend/src         popup: status, log, settings, first-run setup (TypeScript, no framework); text in i18n.ts
+frontend/            TypeScript sources (bundled with esbuild, type-checked with tsc)
+build/darwin         Info.plist (LSUIElement: menu bar only)
+.github/workflows    on a v* tag: test, build both platforms and publish a release
 ```
 
 ## License
 
 [MIT](LICENSE)
 
-图标来自 Microsoft [Fluent UI Emoji](https://github.com/microsoft/fluentui-emoji) 的「Baby chick」（MIT，Copyright (c) Microsoft Corporation），镜像后使用，详见 [build/icons](build/icons/README.md)。
+The icon is Microsoft's [Fluent UI Emoji](https://github.com/microsoft/fluentui-emoji) "Baby chick" (MIT, Copyright (c) Microsoft Corporation), mirrored; see [build/icons](build/icons/README.md).
 
-弹出窗口里的 Claude 和 OpenAI 标志来自 [lobe-icons](https://github.com/lobehub/lobe-icons)（MIT，Copyright (c) 2023 LobeHub），见 `frontend/src/logos.ts`。这些标志是 Anthropic 和 OpenAI 的商标，Kikri 只用它们标明卡片对应哪个服务，与这两家公司没有关联。
+The Claude and OpenAI logos in the popup come from [lobe-icons](https://github.com/lobehub/lobe-icons) (MIT, Copyright (c) 2023 LobeHub), see `frontend/src/logos.ts`. They are trademarks of Anthropic and OpenAI; Kikri uses them only to show which service a card belongs to and is not affiliated with either company.

@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"github.com/ethan2047rr/kikri/internal/gui"
+	"github.com/ethan2047rr/kikri/internal/locale"
 )
 
 const (
@@ -92,11 +93,16 @@ func Run(version string) error {
 	menu := app.NewMenu()
 	menu.Add("Kikri " + version).SetEnabled(false)
 	menu.AddSeparator()
-	menu.Add("重新检测").OnClick(func(*application.Context) {
+	redetect := menu.Add(trayLabel(svc.Snapshot().Lang, "redetect")).OnClick(func(*application.Context) {
 		go svc.Refresh(context.Background())
 	})
 	menu.AddSeparator()
-	menu.Add("退出 Kikri").OnClick(func(*application.Context) { app.Quit() })
+	quit := menu.Add(trayLabel(svc.Snapshot().Lang, "quit")).OnClick(func(*application.Context) { app.Quit() })
+	svc.onLang = func(lang string) {
+		redetect.SetLabel(trayLabel(lang, "redetect"))
+		quit.SetLabel(trayLabel(lang, "quit"))
+		menu.Update()
+	}
 	svc.quit = app.Quit
 	tray.SetMenu(menu)
 	tray.AttachWindow(popup).WindowOffset(5)
@@ -120,4 +126,16 @@ func Run(version string) error {
 	stopScheduler()
 	svc.Close()
 	return err
+}
+
+// trayLabel is a tray menu item's text in the UI language.
+func trayLabel(lang, key string) string {
+	labels := map[string][2]string{ // zh, en
+		"redetect": {"重新检测", "Re-detect"},
+		"quit":     {"退出 Kikri", "Quit Kikri"},
+	}
+	if lang == locale.En {
+		return labels[key][1]
+	}
+	return labels[key][0]
 }

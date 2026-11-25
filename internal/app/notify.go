@@ -10,6 +10,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
+	"github.com/ethan2047rr/kikri/internal/locale"
 	"github.com/ethan2047rr/kikri/internal/scheduler"
 	"github.com/ethan2047rr/kikri/internal/store"
 	"github.com/ethan2047rr/kikri/internal/wake"
@@ -81,7 +82,8 @@ func (n *notifier) send(id, title, body string) {
 // notification: only when the user has to act (not logged in) or the wake
 // kept failing (F5: "只在未登录或连续失败时提醒"). A skipped slot, a used-up
 // quota or a slot still waiting for the network stays quiet.
-func slotNotice(plan scheduler.PlanDef, sl store.Slot, res wake.Result) (title, body string, ok bool) {
+func slotNotice(lang string, plan scheduler.PlanDef, sl store.Slot, res wake.Result) (title, body string, ok bool) {
+	en := lang == locale.En
 	if sl.State != store.SlotFailed {
 		return "", "", false
 	}
@@ -92,6 +94,9 @@ func slotNotice(plan scheduler.PlanDef, sl store.Slot, res wake.Result) (title, 
 		if cmd == "" {
 			cmd = plan.Tool
 		}
+		if en {
+			return plan.Name + ": not signed in", fmt.Sprintf("The %s wake was not sent. Run %s in a terminal to sign in.", at, cmd), true
+		}
 		return plan.Name + " 未登录", fmt.Sprintf("%s 的唤醒没有发出。请在终端运行 %s 登录。", at, cmd), true
 	case wake.OutcomeQuotaExhausted:
 		return "", "", false
@@ -99,6 +104,13 @@ func slotNotice(plan scheduler.PlanDef, sl store.Slot, res wake.Result) (title, 
 		msg := res.Message
 		if len([]rune(msg)) > 120 {
 			msg = string([]rune(msg)[:120]) + "…"
+		}
+		if en {
+			body := fmt.Sprintf("The %s wake failed after %d attempts", at, sl.Attempts)
+			if msg != "" {
+				body += ": " + msg
+			}
+			return plan.Name + ": wake failed", body, true
 		}
 		body := fmt.Sprintf("%s 的唤醒尝试了 %d 次都失败了", at, sl.Attempts)
 		if msg != "" {

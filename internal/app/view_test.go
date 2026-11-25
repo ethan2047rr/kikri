@@ -69,11 +69,11 @@ func TestSlotNotice(t *testing.T) {
 	at := time.Date(2026, 11, 25, 6, 30, 0, 0, time.Local)
 	failed := store.Slot{Plan: claude.ID, At: at, State: store.SlotFailed, Attempts: 3}
 
-	title, body, ok := slotNotice(claude, failed, wake.Result{Outcome: wake.OutcomeNotLoggedIn})
+	title, body, ok := slotNotice("zh", claude, failed, wake.Result{Outcome: wake.OutcomeNotLoggedIn})
 	if !ok || !strings.Contains(title, "未登录") || !strings.Contains(body, "claude auth login") || !strings.Contains(body, "06:30") {
 		t.Fatalf("not logged in: %q %q %v", title, body, ok)
 	}
-	if _, body, ok := slotNotice(claude, failed, wake.Result{Outcome: wake.OutcomeNetworkError, Message: strings.Repeat("x", 300)}); !ok || !strings.Contains(body, "3 次") || len([]rune(body)) > 160 {
+	if _, body, ok := slotNotice("zh", claude, failed, wake.Result{Outcome: wake.OutcomeNetworkError, Message: strings.Repeat("x", 300)}); !ok || !strings.Contains(body, "3 次") || len([]rune(body)) > 160 {
 		t.Fatalf("network: %q %v", body, ok)
 	}
 	for _, c := range []struct {
@@ -87,8 +87,20 @@ func TestSlotNotice(t *testing.T) {
 	} {
 		sl := failed
 		sl.State = c.state
-		if _, _, ok := slotNotice(claude, sl, wake.Result{Outcome: c.out}); ok {
+		if _, _, ok := slotNotice("zh", claude, sl, wake.Result{Outcome: c.out}); ok {
 			t.Errorf("%s/%s should stay quiet", c.state, c.out)
 		}
+	}
+}
+
+func TestSlotNoticeEnglish(t *testing.T) {
+	claude := scheduler.Plans[0]
+	failed := store.Slot{State: store.SlotFailed, At: time.Date(2026, 11, 26, 6, 30, 0, 0, time.Local), Attempts: 3}
+	title, body, ok := slotNotice("en", claude, failed, wake.Result{Outcome: wake.OutcomeNotLoggedIn})
+	if !ok || !strings.HasSuffix(title, ": not signed in") || !strings.Contains(body, "claude auth login") {
+		t.Fatalf("%q %q", title, body)
+	}
+	if _, body, _ := slotNotice("en", claude, failed, wake.Result{Outcome: wake.OutcomeTimeout, Message: "x"}); body != "The 06:30 wake failed after 3 attempts: x" {
+		t.Fatal(body)
 	}
 }

@@ -133,6 +133,7 @@ export interface StatuslineState {
 }
 
 export interface Snapshot {
+  lang: "zh" | "en"; // effective UI language
   claudeStatusline?: StatuslineState;
   version: string;
   appDir: Layout;
@@ -145,7 +146,7 @@ export interface Snapshot {
   settings?: SchedulerSettings;
   storeError?: string;
 
-  prefs: { onboarded: boolean; notify: boolean };
+  prefs: { onboarded: boolean; notify: boolean; language?: "" | "zh" | "en" }; // language "" follows the system
   autostart: boolean;
   notifyUnavailable?: string;
   quota: Record<string, PlanQuota> | null;

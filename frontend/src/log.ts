@@ -1,5 +1,6 @@
 import { dayLabel, hhmm, outcomeChip, planTitle, resultDetail } from "./format";
 import type { Entry, Snapshot } from "./types";
+import { L } from "./i18n";
 import { logo } from "./logos";
 import { attempt, call, chip, h } from "./ui";
 
@@ -24,9 +25,9 @@ export function renderLog(snap: Snapshot): HTMLElement {
   const entries = cache?.entries ?? [];
 
   if (!cache) {
-    body.append(h("p", { class: "placeholder" }, "正在读取…"));
+    body.append(h("p", { class: "placeholder" }, L.loading));
   } else if (entries.length === 0) {
-    body.append(h("p", { class: "placeholder" }, "还没有唤醒记录。到了排班时间，这里会记下每一次唤醒。"));
+    body.append(h("p", { class: "placeholder" }, L.noLog));
   } else {
     const groups = new Map<string, Entry[]>();
     for (const e of entries) {
@@ -51,7 +52,7 @@ export function renderLog(snap: Snapshot): HTMLElement {
 
   const s = snap.stats;
   const foot = h("div", { class: "foot row-between" },
-    h("span", { class: "foot-note" }, `本月提前唤醒 ${s.monthWakes} 次 · 跳过 ${s.monthSkipped} 次`),
-    h("button", { type: "button", class: "btn small", onclick: () => void attempt(() => call("OpenDataFolder")) }, "打开数据文件夹"));
+    h("span", { class: "foot-note" }, L.monthStats(s.monthWakes, s.monthSkipped)),
+    h("button", { type: "button", class: "btn small", onclick: () => void attempt(() => call("OpenDataFolder")) }, L.openDataFolder));
   return h("div", { class: "view" }, body, foot);
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/ethan2047rr/kikri/internal/appdir"
 	"github.com/ethan2047rr/kikri/internal/autostart"
 	"github.com/ethan2047rr/kikri/internal/detect"
+	"github.com/ethan2047rr/kikri/internal/locale"
 	"github.com/ethan2047rr/kikri/internal/quota"
 	"github.com/ethan2047rr/kikri/internal/schedule"
 	"github.com/ethan2047rr/kikri/internal/scheduler"
@@ -33,6 +34,8 @@ type Prefs struct {
 	// StatuslineDecided: reading Claude Code's status line (on by default,
 	// D24) was set up or chosen once; Kikri never re-enables it after that.
 	StatuslineDecided bool `json:"statuslineDecided"`
+	// Language: "" follows the system, or "zh" / "en".
+	Language string `json:"language,omitempty"`
 }
 
 const prefsKey = "app"
@@ -42,6 +45,7 @@ func defaultPrefs() Prefs { return Prefs{Notify: true} }
 // Snapshot is everything the popup shows.
 type Snapshot struct {
 	Version      string        `json:"version"`
+	Lang         string        `json:"lang"` // effective UI language: "zh" or "en"
 	AppDir       appdir.Layout `json:"appDir"`
 	AppDirError  string        `json:"appDirError,omitempty"`
 	Detecting    bool          `json:"detecting"`
@@ -73,6 +77,8 @@ type Service struct {
 	emit    func(Snapshot)
 	quit    func()
 	notes   notifier
+	// onLang is called when the UI language changes (the tray menu).
+	onLang func(lang string)
 
 	mu       sync.Mutex
 	snap     Snapshot
@@ -92,7 +98,7 @@ type Service struct {
 func NewService(version string, emit func(Snapshot)) *Service {
 	return &Service{
 		version: version, emit: emit,
-		snap: Snapshot{Version: version, Prefs: defaultPrefs(), Quota: map[string]*PlanQuota{}, Waking: map[string]bool{}},
+		snap: Snapshot{Version: version, Lang: locale.Resolve(""), Prefs: defaultPrefs(), Quota: map[string]*PlanQuota{}, Waking: map[string]bool{}},
 	}
 }
 
@@ -125,6 +131,7 @@ func (s *Service) Prepare() {
 	s.mu.Lock()
 	s.snap.Prefs, s.snap.Autostart = prefs, on
 	s.mu.Unlock()
+	s.applyLanguage()
 	s.engine = newEngine(layout, st, s.plansChanged, s.slotFinished)
 	// Users who finished onboarding before D24 get the default once; new
 	// users choose in onboarding.
@@ -259,9 +266,9 @@ func (s *Service) slotFinished(plan scheduler.PlanDef, sl store.Slot, res wake.R
 		go s.RefreshQuota(true)
 	}
 	s.mu.Lock()
-	notify := s.snap.Prefs.Notify
+	notify, lang := s.snap.Prefs.Notify, s.snap.Lang
 	s.mu.Unlock()
-	if title, body, ok := slotNotice(plan, sl, res); ok && notify {
+	if title, body, ok := slotNotice(lang, plan, sl, res); ok && notify {
 		s.notes.send(noticeID(plan, sl.At), title, body)
 	}
 }
@@ -488,6 +495,40 @@ func (s *Service) updatePrefs(fn func(*Prefs)) error {
 	s.mu.Unlock()
 	s.publish(snap)
 	return nil
+}
+
+// SetLanguage sets the UI language: "" follows the system, "zh" or "en".
+func (s *Service) SetLanguage(lang string) error {
+	if lang != "" && lang != locale.Zh && lang != locale.En {
+		return errors.New("unknown language " + lang)
+	}
+	if err := s.updatePrefs(func(p *Prefs) { p.Language = lang }); err != nil {
+		return err
+	}
+	s.applyLanguage()
+	s.mu.Lock()
+	snap := s.snap
+	s.mu.Unlock()
+	s.publish(snap)
+	return nil
+}
+
+// applyLanguage resolves the UI language and tells the parts outside the
+// popup: the tray menu and the status line relay (which reads a file).
+func (s *Service) applyLanguage() {
+	s.mu.Lock()
+	lang := locale.Resolve(s.snap.Prefs.Language)
+	s.snap.Lang = lang
+	root, onLang := s.snap.AppDir.Root, s.onLang
+	s.mu.Unlock()
+	if onLang != nil {
+		onLang(lang)
+	}
+	if p, err := statusline.DefaultPaths(root); err == nil && root != "" {
+		if err := statusline.SetLanguage(p, lang); err != nil {
+			slog.Warn("save UI language for the status line", "err", err)
+		}
+	}
 }
 
 // SetNotify turns failure notifications on or off.

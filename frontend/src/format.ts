@@ -1,15 +1,12 @@
+import { L } from "./i18n";
 import type { Entry, Outcome, PlanStatus, Preset, SchedulePlan, Snapshot, ToolStatus } from "./types";
 
-const WEEKDAY = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 /** Monday-first display order of the Sunday-indexed weekdays array. */
 export const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
-export const DAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"];
 
-export const PRESET_LABEL: Record<Preset, string> = {
-  "early-bird": "早鸟",
-  three: "三轮",
-  custom: "自定义",
-};
+export function presetLabel(p: Preset): string {
+  return L.preset[p] ?? p;
+}
 
 export function hhmm(t: string | Date): string {
   const d = typeof t === "string" ? new Date(t) : t;
@@ -24,14 +21,14 @@ function startOfDay(d: Date): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-/** "今天 · 周三", "昨天 · 周二", "11月23日 · 周一". */
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** "今天 · 周三", "昨天 · 周二", "11月23日 · 周一" ("Today · Wed", "Nov 23 · Mon"). */
 export function dayLabel(d: Date, now = new Date()): string {
   const diff = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
-  const wd = WEEKDAY[d.getDay()];
-  if (diff === 0) return `今天 · ${wd}`;
-  if (diff === 1) return `昨天 · ${wd}`;
-  if (diff === -1) return `明天 · ${wd}`;
-  return `${d.getMonth() + 1}月${d.getDate()}日 · ${wd}`;
+  const wd = L.weekday[d.getDay()];
+  const day = diff === 0 ? L.today : diff === 1 ? L.yesterday : diff === -1 ? L.tomorrow : L.monthDay(d);
+  return `${cap(day)} · ${wd}`;
 }
 
 /** hhmm, prefixed with the day when it is not today ("明天 06:30"). */
@@ -39,32 +36,32 @@ export function whenLabel(t: string, now = new Date()): string {
   const d = new Date(t);
   const diff = Math.round((startOfDay(d) - startOfDay(now)) / 86_400_000);
   if (diff === 0) return hhmm(d);
-  if (diff === 1) return `明天 ${hhmm(d)}`;
-  return `${WEEKDAY[d.getDay()]} ${hhmm(d)}`;
+  if (diff === 1) return L.dayAt(L.tomorrow, hhmm(d));
+  return L.dayAt(L.weekday[d.getDay()]!, hhmm(d));
 }
 
 /** "2 小时 10 分", "8 分钟", "不到 1 分钟". */
 export function countdown(to: string, now = Date.now()): string {
   const mins = Math.floor((Date.parse(to) - now) / 60_000);
-  if (mins < 1) return "不到 1 分钟";
+  if (mins < 1) return L.lessThanMinute;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  if (h === 0) return `${m} 分钟`;
-  if (h >= 24) return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
-  return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分`;
+  if (h === 0) return L.minutes(m);
+  if (h >= 24) return L.daysHours(Math.floor(h / 24), h % 24);
+  return m === 0 ? L.hours(h) : L.hoursMinutes(h, m);
 }
 
 export function daysLabel(w: boolean[]): string {
   const on = DAY_ORDER.filter((i) => w[i]);
-  if (on.length === 7) return "每天";
-  if (on.length === 0) return "不唤醒";
-  if (on.length === 5 && on.every((i) => i >= 1 && i <= 5)) return "工作日";
-  if (on.length === 2 && w[0] && w[6]) return "周末";
-  return "周" + on.map((i) => DAY_SHORT[i]).join("、");
+  if (on.length === 7) return L.everyday;
+  if (on.length === 0) return L.never;
+  if (on.length === 5 && on.every((i) => i >= 1 && i <= 5)) return L.workdays;
+  if (on.length === 2 && w[0] && w[6]) return L.weekend;
+  return L.daysList(on.map((i) => L.dayShort[i]!));
 }
 
 export function scheduleSummary(p: SchedulePlan, times: string[] | null): string {
-  return `${PRESET_LABEL[p.preset]} · ${daysLabel(p.weekdays)} ${(times ?? []).join("、")}`.trim();
+  return `${presetLabel(p.preset)} · ${daysLabel(p.weekdays)} ${(times ?? []).join(L.listSep)}`.trim();
 }
 
 /** "codex-cli 0.171.0" / "2.1.327 (Claude Code)" -> "0.171.0" / "2.1.327". */
@@ -107,20 +104,20 @@ export function outcomeChip(e: Entry): { label: string; tone: Tone } {
   const o: Outcome = e.outcome;
   switch (o) {
     case "ok":
-      if (e.trigger === "makeup") return { label: "补发成功", tone: "ok" };
-      if (e.trigger === "retry") return { label: "重试成功", tone: "ok" };
-      if (e.trigger === "deferred") return { label: "顺延成功", tone: "ok" };
-      return { label: "成功", tone: "ok" };
-    case "skipped": return { label: "已跳过", tone: "warn" };
-    case "offline": return { label: "等待网络", tone: "warn" };
-    case "network_error": return { label: "网络错误", tone: "warn" };
-    case "timeout": return { label: "超时", tone: "warn" };
-    case "busy": return { label: "稍后重试", tone: "warn" };
-    case "not_logged_in": return { label: "未登录", tone: "bad" };
-    case "quota_exhausted": return { label: "额度用完", tone: "bad" };
-    case "expired": return { label: "已错过", tone: "bad" };
-    case "paused": return { label: "已暂停", tone: "muted" };
-    default: return { label: "失败", tone: "bad" };
+      if (e.trigger === "makeup") return { label: L.outcome.makeupOk, tone: "ok" };
+      if (e.trigger === "retry") return { label: L.outcome.retryOk, tone: "ok" };
+      if (e.trigger === "deferred") return { label: L.outcome.deferredOk, tone: "ok" };
+      return { label: L.outcome.ok, tone: "ok" };
+    case "skipped": return { label: L.outcome.skipped, tone: "warn" };
+    case "offline": return { label: L.outcome.offline, tone: "warn" };
+    case "network_error": return { label: L.outcome.network_error, tone: "warn" };
+    case "timeout": return { label: L.outcome.timeout, tone: "warn" };
+    case "busy": return { label: L.outcome.busy, tone: "warn" };
+    case "not_logged_in": return { label: L.outcome.not_logged_in, tone: "bad" };
+    case "quota_exhausted": return { label: L.outcome.quota_exhausted, tone: "bad" };
+    case "expired": return { label: L.outcome.expired, tone: "bad" };
+    case "paused": return { label: L.outcome.paused, tone: "muted" };
+    default: return { label: L.outcome.failed, tone: "bad" };
   }
 }
 
@@ -128,17 +125,18 @@ export function outcomeChip(e: Entry): { label: string; tone: Tone } {
 export function reasonText(msg: string | undefined): string {
   if (!msg) return "";
   const deferred = msg.match(/^(.*); deferred to (\d\d:\d\d)$/);
-  if (deferred) return `${reasonText(deferred[1])}，顺延到 ${deferred[2]} 再唤醒`;
+  if (deferred) return L.reason.deferred(reasonText(deferred[1]), deferred[2]!);
+  const r = L.reason;
   const rules: [RegExp, (m: RegExpMatchArray) => string][] = [
-    [/^a window is already running; it resets at (\d\d:\d\d)$/, (m) => `窗口已在跑，${m[1]} 刷新`],
-    [/^the window opened by the (\d\d:\d\d) wake runs until (\d\d:\d\d)$/, (m) => `${m[1]} 唤醒的窗口要到 ${m[2]} 才刷新`],
-    [/^Kikri already woke it at (\d\d:\d\d)$/, (m) => `Kikri ${m[1]} 已经唤醒过`],
-    [/^you used it at (\d\d:\d\d), so a window is already running$/, (m) => `窗口已在跑（你 ${m[1]} 用过）`],
-    [/^this plan has no 5-hour window \((.*)\)$/, (m) => `这个套餐没有 5 小时窗口（${m[1]}）`],
-    [/^paused for today$/, () => "今天已暂停"],
-    [/^still failing \(no network\?\) when the make-up deadline (\d\d:\d\d) passed$/, (m) => `一直没联网，过了补发截止时间 ${m[1]}`],
-    [/^deferred wake missed .* when the make-up deadline (\d\d:\d\d) passed$/, (m) => `顺延的唤醒没赶上（电脑没开），${m[1]} 后不再补`],
-    [/^(.*) when the make-up deadline (\d\d:\d\d) passed$/, (m) => `电脑没开或没联网，过了补发截止时间 ${m[2]}`],
+    [/^a window is already running; it resets at (\d\d:\d\d)$/, (m) => r.running(m[1]!)],
+    [/^the window opened by the (\d\d:\d\d) wake runs until (\d\d:\d\d)$/, (m) => r.kikriWindow(m[1]!, m[2]!)],
+    [/^Kikri already woke it at (\d\d:\d\d)$/, (m) => r.kikriWoke(m[1]!)],
+    [/^you used it at (\d\d:\d\d), so a window is already running$/, (m) => r.youUsed(m[1]!)],
+    [/^this plan has no 5-hour window \((.*)\)$/, (m) => r.noWindow(m[1]!)],
+    [/^paused for today$/, () => r.pausedToday],
+    [/^still failing \(no network\?\) when the make-up deadline (\d\d:\d\d) passed$/, (m) => r.offlineExpired(m[1]!)],
+    [/^deferred wake missed .* when the make-up deadline (\d\d:\d\d) passed$/, (m) => r.deferredMissed(m[1]!)],
+    [/^(.*) when the make-up deadline (\d\d:\d\d) passed$/, (m) => r.missed(m[2]!)],
   ];
   for (const [re, f] of rules) {
     const m = msg.match(re);
@@ -147,25 +145,25 @@ export function reasonText(msg: string | undefined): string {
   return msg;
 }
 
-/** "3.6s · 633 tokens · 11:30 刷新". */
+/** "3.6s · 633 tokens · 11:30 刷新" ("... · resets 11:30"). */
 export function resultDetail(e: Entry, withReset = true): string {
   const r = e.result;
   const parts: string[] = [];
-  if (e.trigger === "makeup") parts.push("开盖后补发");
-  if (e.trigger === "manual") parts.push("手动");
-  if (e.trigger === "deferred") parts.push("刷新后顺延");
+  if (e.trigger === "makeup") parts.push(L.detail.makeup);
+  if (e.trigger === "manual") parts.push(L.detail.manual);
+  if (e.trigger === "deferred") parts.push(L.detail.deferred);
   if (e.outcome === "ok" && r) {
     if (r.durationMs) parts.push(`${(r.durationMs / 1000).toFixed(1)}s`);
     if (r.usage) parts.push(`${r.usage.inputTokens.toLocaleString("en-US")} tokens`);
     const w = r.windows?.find((x) => x.kind === "five_hour");
-    if (withReset && w && isValidTime(w.resetsAt)) parts.push(`${hhmm(w.resetsAt)} 刷新`);
+    if (withReset && w && isValidTime(w.resetsAt)) parts.push(L.detail.resets(hhmm(w.resetsAt)));
     return parts.join(" · ");
   }
   const tool = r?.tool ?? "";
   switch (e.outcome) {
-    case "offline": parts.push("没有网络，联网后补发"); break;
-    case "not_logged_in": parts.push(`请在终端运行 ${LOGIN_COMMAND[tool] ?? tool + " login"}`); break;
-    case "busy": parts.push("上一次唤醒还没结束"); break;
+    case "offline": parts.push(L.detail.offline); break;
+    case "not_logged_in": parts.push(L.detail.runLogin(LOGIN_COMMAND[tool] ?? tool + " login")); break;
+    case "busy": parts.push(L.detail.busy); break;
     default: parts.push(reasonText(r?.message) || (r?.outcome ?? ""));
   }
   return parts.filter(Boolean).join(" · ");

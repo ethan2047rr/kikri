@@ -228,7 +228,10 @@ func TestLineDropsExpiredWindow(t *testing.T) {
 	now := time.Now()
 	u := 80.0
 	d := &Data{FiveHour: &Window{UsedPercent: &u, ResetsAt: now.Add(-time.Minute)}, SevenDay: &Window{UsedPercent: &u, ResetsAt: now.Add(time.Hour)}}
-	if got := Line(d, now); got != "本周 80%" {
+	if got := Line(d, now, "zh"); got != "本周 80%" {
+		t.Fatal(got)
+	}
+	if got := Line(d, now, "en"); got != "week 80%" {
 		t.Fatal(got)
 	}
 }

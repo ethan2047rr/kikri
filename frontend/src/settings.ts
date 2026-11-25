@@ -1,4 +1,5 @@
 import { cleanVersion, LOGIN_COMMAND, planTitle, toolFor, whenLabel } from "./format";
+import { L } from "./i18n";
 import { logo } from "./logos";
 import { scheduleEditor } from "./schedule-ui";
 import type { PlanStatus, SchedulePlan, Snapshot } from "./types";
@@ -14,7 +15,7 @@ function save(planID: string, p: SchedulePlan): void {
 function scheduleCard(snap: Snapshot, plans: PlanStatus[]): HTMLElement {
   const enabled = plans.filter((p) => p.schedule.enabled);
   if (enabled.length === 0) {
-    return h("div", { class: "panel pad" }, h("span", { class: "row-sub" }, "先在上面打开一个套餐"));
+    return h("div", { class: "panel pad" }, h("span", { class: "row-sub" }, L.turnOnPlanFirst));
   }
   if (!editing || !enabled.some((p) => p.plan.id === editing)) editing = enabled[0]!.plan.id;
   const ps = enabled.find((p) => p.plan.id === editing)!;
@@ -22,7 +23,7 @@ function scheduleCard(snap: Snapshot, plans: PlanStatus[]): HTMLElement {
 
   const pickPlan = enabled.length > 1
     ? segmented(enabled.map((x) => ({ value: x.plan.id, label: planTitle(snap, x) })), ps.plan.id,
-      (id) => { editing = id; rerender(); }, "选择套餐")
+      (id) => { editing = id; rerender(); }, L.pickPlan)
     : null;
 
   const editor = scheduleEditor({ times: ps.times ?? [], weekdays: p.weekdays }, (v) =>
@@ -36,14 +37,14 @@ function planRows(snap: Snapshot, plans: PlanStatus[]): HTMLElement {
   return h("div", { class: "panel" }, plans.map((ps) => {
     const t = toolFor(snap, ps.plan.tool);
     let detail: string;
-    if (!snap.detectedOnce) detail = "正在检测…";
-    else if (!t?.found) detail = `未找到 ${ps.plan.tool}，安装后点「重新检测」`;
-    else if (t.auth && !t.auth.loggedIn) detail = `未登录 · 请运行 ${LOGIN_COMMAND[ps.plan.tool] ?? ps.plan.tool + " login"}`;
-    else detail = `自动识别 · ${t.name} ${cleanVersion(t.version)}`.trim();
+    if (!snap.detectedOnce) detail = L.detecting;
+    else if (!t?.found) detail = L.notFoundRedetect(ps.plan.tool);
+    else if (t.auth && !t.auth.loggedIn) detail = L.notLoggedInRun(LOGIN_COMMAND[ps.plan.tool] ?? ps.plan.tool + " login");
+    else detail = L.autoDetected(t.name, cleanVersion(t.version));
     const missing = snap.detectedOnce && !t?.found;
     const agents = ps.plan.tool === "codex" && snap.agentsMd
       ? h("span", { class: "row-sub warn-text" },
-        `全局 AGENTS.md 有 ${Math.round(snap.agentsMd.bytes / 1024)} KB，每次唤醒多约 ${(snap.agentsMd.tokens / 1000).toFixed(1)}k tokens`)
+        L.agentsMd(Math.round(snap.agentsMd.bytes / 1024), (snap.agentsMd.tokens / 1000).toFixed(1)))
       : null;
     return h("div", { class: missing ? "row absent" : "row" },
       logo(ps.plan.tool, 20),
@@ -63,55 +64,59 @@ export function renderSettings(snap: Snapshot, redraw: () => void, openLog: () =
   const plans = snap.plans ?? [];
   const st = snap.settings;
 
-  const cutoff = timeField(st?.cutoff ?? "09:00", (v) => void attempt(() => call("SetCutoff", v)), "补发截止时间", "cutoff");
+  const cutoff = timeField(st?.cutoff ?? "09:00", (v) => void attempt(() => call("SetCutoff", v)), L.cutoff, "cutoff");
 
   const sl = snap.claudeStatusline;
   const claudeFound = toolFor(snap, "claude")?.found !== false;
   const slDetail = sl?.error
     ? h("span", { class: "row-sub warn-text" }, sl.error)
     : sl?.installed
-      ? h("span", { class: "row-sub" }, sl.at ? `已接入 · Claude Code 最近一次报告 ${whenLabel(sl.at)}` : "已接入 · 下次用 Claude Code 时开始更新")
-      : h("span", { class: "row-sub" }, "你自己用 Claude Code 时，读取它状态栏里的刷新时间和用量，不花 token。会在 ",
-        h("code", null, "~/.claude/settings.json"), " 的状态栏命令前加一层转发：原来的显示不变，没有状态栏的显示一行额度；关掉即还原");
+      ? h("span", { class: "row-sub" }, sl.at ? L.statuslineOn(whenLabel(sl.at)) : L.statuslineWaiting)
+      : h("span", { class: "row-sub" }, L.statuslineOff[0], h("code", null, "~/.claude/settings.json"), L.statuslineOff[1]);
 
   const notifyDetail = snap.notifyUnavailable
-    ? "直接运行程序时系统不允许发通知；从 Kikri.app 启动后可用"
-    : "只在未登录或多次唤醒失败时提醒";
+    ? L.notifyUnavailable
+    : L.notifyDetail;
+
+  const language = segmented(
+    [{ value: "", label: L.languageSystem }, { value: "zh", label: "中文" }, { value: "en", label: "English" }],
+    snap.prefs.language ?? "", (v) => void attempt(() => call("SetLanguage", v)), L.section.language);
 
   const body = h("div", { class: "body stack scroll" },
     h("section", { class: "stack-xs" },
-      h("div", { class: "row-between" }, h("h2", { class: "section-label" }, "套餐"),
+      h("div", { class: "row-between" }, h("h2", { class: "section-label" }, L.section.plans),
         h("button", {
           type: "button", class: "link", disabled: snap.detecting,
           onclick: () => void attempt(() => call("Refresh")),
-        }, snap.detecting ? "检测中…" : "重新检测")),
+        }, snap.detecting ? L.detectingShort : L.redetect)),
       planRows(snap, plans)),
-    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, "排班"), scheduleCard(snap, plans)),
-    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, "补发"),
+    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, L.section.schedule), scheduleCard(snap, plans)),
+    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, L.section.makeup),
       h("div", { class: "panel" }, h("div", { class: "row" },
         h("div", { class: "row-text" },
-          h("label", { class: "row-name", for: "cutoff" }, "补发截止时间"),
-          h("span", { class: "row-sub" }, "错过的早上排班，开盖联网后在这个时间之前补发；再晚补发会把下午的刷新往后推")),
+          h("label", { class: "row-name", for: "cutoff" }, L.cutoff),
+          h("span", { class: "row-sub" }, L.cutoffHint)),
         cutoff))),
-    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, "选项"),
+    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, L.section.options),
       h("div", { class: "panel" },
-        option("参考你自己的使用", "你 5 小时内用过就不再唤醒；只看会话文件的修改时间，不读内容",
+        option(L.useActivity, L.useActivityHint,
           st?.useActivity ?? true, (v) => call("SetUseActivity", v)),
-        claudeFound && option("读取 Claude Code 状态栏", slDetail, !!sl?.installed, (v) => call("SetClaudeStatusline", v)),
-        option("窗口在跑时顺延", "到点时窗口还没刷新，就等它刷新后 5 分钟再唤醒一次，不直接跳过",
+        claudeFound && option(L.statusline, slDetail, !!sl?.installed, (v) => call("SetClaudeStatusline", v)),
+        option(L.deferSkipped, L.deferSkippedHint,
           st?.deferSkipped ?? false, (v) => call("SetDeferSkipped", v)),
-        option("开机自启", "登录后在菜单栏常驻，到点才能唤醒", snap.autostart, (v) => call("SetAutostart", v)),
-        option("通知", notifyDetail, snap.prefs.notify && !snap.notifyUnavailable, (v) => call("SetNotify", v), !!snap.notifyUnavailable))),
-    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, "记录"),
+        option(L.autostart, L.autostartHint, snap.autostart, (v) => call("SetAutostart", v)),
+        option(L.notify, notifyDetail, snap.prefs.notify && !snap.notifyUnavailable, (v) => call("SetNotify", v), !!snap.notifyUnavailable))),
+    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, L.section.language), language),
+    h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, L.section.records),
       h("div", { class: "panel" },
         h("button", { type: "button", class: "row nav-row", onclick: openLog },
           h("div", { class: "row-text" },
-            h("span", { class: "row-name" }, "唤醒记录"),
-            h("span", { class: "row-sub" }, `本月提前唤醒 ${snap.stats.monthWakes} 次 · 跳过 ${snap.stats.monthSkipped} 次`)),
+            h("span", { class: "row-name" }, L.wakeLog),
+            h("span", { class: "row-sub" }, L.monthStats(snap.stats.monthWakes, snap.stats.monthSkipped))),
           h("span", { class: "chevron", "aria-hidden": "true" }, "›")))));
 
   const foot = h("div", { class: "foot row-between" },
     h("span", { class: "foot-note" }, `Kikri ${snap.version}`),
-    h("button", { type: "button", class: "btn small", onclick: () => void call("Quit") }, "退出 Kikri"));
+    h("button", { type: "button", class: "btn small", onclick: () => void call("Quit") }, L.quit));
   return h("div", { class: "view" }, body, foot);
 }

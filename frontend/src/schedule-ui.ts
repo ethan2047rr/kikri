@@ -1,4 +1,5 @@
-import { DAY_ORDER, DAY_SHORT, PRESET_LABEL } from "./format";
+import { DAY_ORDER, presetLabel } from "./format";
+import { L } from "./i18n";
 import type { Preset } from "./types";
 import { h, timeField } from "./ui";
 
@@ -27,7 +28,6 @@ const AFTER_REFRESH = 5;
 const WORKDAYS = [false, true, true, true, true, true, false];
 const EVERYDAY = [true, true, true, true, true, true, true];
 const WEEKEND = [true, false, false, false, false, false, true];
-const WEEKDAY_NAME = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 export interface ScheduleValue {
   times: string[];
@@ -71,8 +71,8 @@ export function nextWakeLabel(v: ScheduleValue, now = new Date()): string | null
     if (!v.weekdays[day]) continue;
     const t = times.find((x) => d > 0 || toMin(x) > nowMin);
     if (!t) continue;
-    const name = WEEKDAY_NAME[day]!;
-    const when = d === 0 ? "今天" : d === 1 ? `明天（${name}）` : name;
+    const name = L.weekday[day]!;
+    const when = d === 0 ? L.today : d === 1 ? L.nextDay(name) : name;
     return `${when} ${t}`;
   }
   return null;
@@ -81,9 +81,7 @@ export function nextWakeLabel(v: ScheduleValue, now = new Date()): string | null
 /** Explains the first wake that falls inside an earlier window. */
 function overlapNote(times: string[], skip: Map<string, number | null>): string | null {
   for (const [t, at] of skip) {
-    return at === null
-      ? `${t} 时上一轮窗口还没结束，这次会被跳过；隔 5 小时以上才能接上下一轮`
-      : `${t} 时上一轮窗口还没结束，会等它刷新后 ${fromMin(at)} 再唤醒`;
+    return at === null ? L.overlapSkip(t) : L.overlapDefer(t, fromMin(at));
   }
   return null;
 }
@@ -112,8 +110,8 @@ function skippedTimes(times: string[], windowMins: number, defer: boolean): Map<
 
 function stepper(label: string, onStep: (mins: number) => void): HTMLElement {
   const btn = (dir: 1 | -1, glyph: string) => h("button", {
-    type: "button", class: "step", "aria-label": `${label}${dir > 0 ? "推后" : "提前"} 1 小时（按住 Shift 为 15 分钟）`,
-    title: `${dir > 0 ? "推后" : "提前"} 1 小时，按住 Shift 为 15 分钟`,
+    type: "button", class: "step", "aria-label": L.stepLabel(label, dir > 0),
+    title: L.stepTitle(dir > 0),
     onclick: (e: MouseEvent) => onStep(dir * (e.shiftKey ? 15 : 60)),
   }, glyph);
   return h("span", { class: "stepper" }, btn(1, "⌃"), btn(-1, "⌄"));
@@ -121,7 +119,7 @@ function stepper(label: string, onStep: (mins: number) => void): HTMLElement {
 
 /** A 24-hour strip with one block per window. */
 function timeline(times: string[], windowMins: number, skip: Map<string, number | null>): HTMLElement {
-  const bar = h("div", { class: "tl-bar", role: "img", "aria-label": times.map((t) => `${t} 到 ${fromMin(toMin(t) + windowMins)}`).join("，") });
+  const bar = h("div", { class: "tl-bar", role: "img", "aria-label": times.map((t) => L.windowSpan(t, fromMin(toMin(t) + windowMins))).join(L.spanSep) });
   for (const t of times) {
     const at = skip.get(t);
     const start = at ?? toMin(t); // a deferred wake opens its window later
@@ -133,24 +131,24 @@ function timeline(times: string[], windowMins: number, skip: Map<string, number 
       bar.append(h("span", {
         class: skipped ? "tl-win skip" : "tl-win",
         style: `left:${(a / 1440) * 100}%;width:${((b - a) / 1440) * 100}%`,
-        title: skipped ? `${t} 会被跳过` : `${fromMin(start)}–${fromMin(end)}`,
+        title: skipped ? L.willSkip(t) : `${fromMin(start)}–${fromMin(end)}`,
       }));
     }
   }
   const now = new Date();
-  bar.append(h("span", { class: "tl-now", style: `left:${((now.getHours() * 60 + now.getMinutes()) / 1440) * 100}%`, title: "现在" }));
+  bar.append(h("span", { class: "tl-now", style: `left:${((now.getHours() * 60 + now.getMinutes()) / 1440) * 100}%`, title: L.now }));
   const ticks = h("div", { class: "tl-ticks", "aria-hidden": "true" },
     [0, 6, 12, 18, 24].map((x) => h("span", { style: `left:${(x / 24) * 100}%` }, String(x))));
   return h("div", { class: "timeline" }, bar, ticks);
 }
 
 function refreshLabel(t: string, deferred: number | null | undefined, windowMins: number): HTMLElement {
-  if (deferred === null) return h("span", { class: "refresh warn-text" }, "会被跳过");
+  if (deferred === null) return h("span", { class: "refresh warn-text" }, L.willSkipShort);
   if (deferred !== undefined) {
-    return h("span", { class: "refresh", title: `${t} 时窗口还在跑，等刷新后再唤醒` },
-      "顺延 ", h("b", null, fromMin(deferred)), " → ", h("b", null, fromMin(deferred + windowMins)));
+    return h("span", { class: "refresh", title: L.deferTitle(t) },
+      L.deferPrefix, h("b", null, fromMin(deferred)), " → ", h("b", null, fromMin(deferred + windowMins)));
   }
-  return h("span", { class: "refresh" }, "→ ", h("b", null, fromMin(toMin(t) + windowMins)), " 刷新");
+  return h("span", { class: "refresh" }, "→ ", h("b", null, fromMin(toMin(t) + windowMins)), L.refreshSuffix);
 }
 
 /** Times, timeline, templates, weekdays and the next-wake preview. */
@@ -170,33 +168,33 @@ export function scheduleEditor(value: ScheduleValue, onChange: (v: ScheduleValue
 
   const rows = h("div", { class: "wake-rows" }, times.map((t, i) => h("div", { class: "wake-row" },
     h("span", { class: "time-edit" },
-      timeField(t, (v) => move(i, v), `唤醒时间 ${i + 1}`),
-      stepper(`唤醒时间 ${t} `, (m) => move(i, fromMin(toMin(t) + m)))),
+      timeField(t, (v) => move(i, v), L.wakeTime(i + 1)),
+      stepper(t, (m) => move(i, fromMin(toMin(t) + m)))),
     refreshLabel(t, skip.get(t), windowMins),
     times.length > 1 && h("button", {
-      type: "button", class: "x", "aria-label": `删除 ${t}`,
+      type: "button", class: "x", "aria-label": L.remove(t),
       onclick: () => emit({ times: times.filter((_, j) => j !== i) }),
     }, "×"))));
   if (times.length < MAX_TIMES && nextAdd < 1440) {
     rows.append(h("button", {
-      type: "button", class: "add", title: `在 ${fromMin(nextAdd)} 再唤醒一次，接上下一轮`,
+      type: "button", class: "add", title: L.addTitle(fromMin(nextAdd)),
       onclick: () => emit({ times: [...times, fromMin(nextAdd)] }),
-    }, `＋ 再接一轮（${fromMin(nextAdd)}）`));
+    }, L.addButton(fromMin(nextAdd))));
   }
 
   const applied = presetFor(times);
   const templates = h("div", { class: "chips-line" },
-    h("span", { class: "row-sub" }, "快速填入"),
+    h("span", { class: "row-sub" }, L.quickFill),
     (Object.keys(PRESET_TIMES) as (keyof typeof PRESET_TIMES)[]).map((v) => h("button", {
       type: "button", class: "template", disabled: applied === v,
-      title: applied === v ? "已经是这个时间" : `把时间设为 ${PRESET_TIMES[v].join("、")}`,
+      title: applied === v ? L.alreadyApplied : L.setTimes(PRESET_TIMES[v]),
       onclick: () => emit({ times: PRESET_TIMES[v] }),
-    }, h("b", null, PRESET_LABEL[v]), ` ${PRESET_TIMES[v].join(" / ")}`)));
+    }, h("b", null, presetLabel(v)), ` ${PRESET_TIMES[v].join(" / ")}`)));
 
-  const dayShortcuts: [string, boolean[]][] = [["工作日", WORKDAYS], ["每天", EVERYDAY], ["周末", WEEKEND]];
+  const dayShortcuts: [string, boolean[]][] = [[L.workdays, WORKDAYS], [L.everyday, EVERYDAY], [L.weekend, WEEKEND]];
   const days = h("div", { class: "stack-xs" },
     h("div", { class: "chips-line" },
-      h("span", { class: "row-sub" }, "哪几天"),
+      h("span", { class: "row-sub" }, L.whichDays),
       dayShortcuts.map(([label, w]) => h("button", {
         type: "button", class: "template", disabled: sameDays(weekdays, w),
         onclick: () => emit({ weekdays: w }),
@@ -204,17 +202,17 @@ export function scheduleEditor(value: ScheduleValue, onChange: (v: ScheduleValue
     h("div", { class: "days" }, DAY_ORDER.map((i) => {
       const on = !!weekdays[i];
       return h("button", {
-        type: "button", class: on ? "day-btn on" : "day-btn", "aria-pressed": String(on), "aria-label": `周${DAY_SHORT[i]}`,
+        type: "button", class: on ? "day-btn on" : "day-btn", "aria-pressed": String(on), "aria-label": L.dayName(i),
         onclick: () => emit({ weekdays: weekdays.map((x, j) => (j === i ? !on : !!x)) }),
-      }, DAY_SHORT[i]);
+      }, L.dayShort[i]);
     })));
 
   const overlap = overlapNote(times, skip);
   const next = nextWakeLabel({ times, weekdays });
   return h("div", { class: "stack" },
     h("div", { class: "stack-sm" }, rows, timeline(times, windowMins, skip),
-      overlap && h("span", { class: overlap.includes("跳过") ? "row-sub warn-text" : "row-sub" }, overlap),
+      overlap && h("span", { class: [...skip.values()][0] === null ? "row-sub warn-text" : "row-sub" }, overlap),
       templates),
     days,
-    h("div", { class: "next-wake" }, next ? ["下次唤醒：", h("b", null, next)] : "没有选星期，不会唤醒"));
+    h("div", { class: "next-wake" }, next ? [L.nextWake, h("b", null, next)] : L.noDays));
 }

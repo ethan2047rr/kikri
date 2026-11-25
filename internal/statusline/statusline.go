@@ -52,6 +52,7 @@ type Paths struct {
 	Settings string // Claude Code's settings.json
 	Backup   string // the user's original statusLine (Kikri data dir)
 	Data     string // the saved rate limits (Kikri data dir)
+	Lang     string // Kikri's UI language, for Line (Kikri data dir)
 }
 
 // DefaultPaths uses CLAUDE_CONFIG_DIR (or ~/.claude) and Kikri's data dir.
@@ -68,6 +69,7 @@ func DefaultPaths(kikriRoot string) (Paths, error) {
 		Settings: filepath.Join(dir, "settings.json"),
 		Backup:   filepath.Join(kikriRoot, "claude-statusline-backup.json"),
 		Data:     filepath.Join(kikriRoot, "claude-rate-limits.json"),
+		Lang:     filepath.Join(kikriRoot, "ui-language"),
 	}, nil
 }
 
@@ -316,7 +318,8 @@ func Relay(p Paths, stdin io.Reader, stdout, stderr io.Writer) int {
 	var sl statusLine
 	if orig == nil || json.Unmarshal(orig, &sl) != nil || sl.Command == "" || isRelay(sl.Command) {
 		d, _ := Read(p.Data)
-		fmt.Fprintln(stdout, Line(d, now))
+		lang, _ := os.ReadFile(p.Lang)
+		fmt.Fprintln(stdout, Line(d, now, strings.TrimSpace(string(lang))))
 		return 0
 	}
 	var cmd *exec.Cmd
@@ -337,21 +340,41 @@ func Relay(p Paths, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// SetLanguage records Kikri's UI language ("zh" or "en") for Line.
+func SetLanguage(p Paths, lang string) error {
+	if cur, err := os.ReadFile(p.Lang); err == nil && string(cur) == lang {
+		return nil
+	}
+	return writeAtomic(p.Lang, []byte(lang), 0o600)
+}
+
 // Line is the status line Kikri shows for users without one of their own,
-// e.g. "5h 23% · 18:30 刷新 · 本周 54%".
-func Line(d *Data, now time.Time) string {
+// e.g. "5h 23% · 18:30 刷新 · 本周 54%" ("5h 23% · resets 18:30 · week 54%").
+func Line(d *Data, now time.Time, lang string) string {
+	en := lang == "en"
 	var parts []string
 	if d != nil && d.FiveHour != nil && d.FiveHour.ResetsAt.After(now) {
 		w := d.FiveHour
 		if w.UsedPercent != nil {
 			parts = append(parts, fmt.Sprintf("5h %.0f%%", *w.UsedPercent))
 		}
-		parts = append(parts, w.ResetsAt.Local().Format("15:04")+" 刷新")
+		if en {
+			parts = append(parts, "resets "+w.ResetsAt.Local().Format("15:04"))
+		} else {
+			parts = append(parts, w.ResetsAt.Local().Format("15:04")+" 刷新")
+		}
 	}
 	if d != nil && d.SevenDay != nil && d.SevenDay.ResetsAt.After(now) && d.SevenDay.UsedPercent != nil {
-		parts = append(parts, fmt.Sprintf("本周 %.0f%%", *d.SevenDay.UsedPercent))
+		if en {
+			parts = append(parts, fmt.Sprintf("week %.0f%%", *d.SevenDay.UsedPercent))
+		} else {
+			parts = append(parts, fmt.Sprintf("本周 %.0f%%", *d.SevenDay.UsedPercent))
+		}
 	}
 	if len(parts) == 0 {
+		if en {
+			return "Usage appears after your first message"
+		}
 		return "额度：发第一条消息后显示"
 	}
 	return strings.Join(parts, " · ")
