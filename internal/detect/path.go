@@ -2,6 +2,7 @@ package detect
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,31 +37,102 @@ type SearchPath struct {
 	Dirs []SearchDir `json:"dirs"`
 	// LoginShellError is set when the login-shell probe failed (Unix only).
 	LoginShellError string `json:"loginShellError,omitempty"`
+	// ProxyEnv holds *_proxy variables exported by the login shell. A GUI app
+	// started from Finder does not inherit them, yet the CLIs need them to
+	// reach their APIs. They may carry credentials, so they are never
+	// serialised; Proxy is the redacted form for display.
+	ProxyEnv []string `json:"-"`
+	Proxy    string   `json:"proxy,omitempty"`
 }
 
 const (
 	pathBegin = "__KIKRI_PATH_BEGIN__"
 	pathEnd   = "__KIKRI_PATH_END__"
+	envBegin  = "__KIKRI_ENV_BEGIN__"
+	envEnd    = "__KIKRI_ENV_END__"
 )
+
+// proxyVars are the only variables Kikri takes from the login shell besides
+// PATH. Everything else (API keys included) is left alone.
+var proxyVars = map[string]bool{
+	"https_proxy": true, "http_proxy": true, "all_proxy": true, "no_proxy": true,
+}
 
 // GUI apps on macOS start with launchd's minimal PATH (/usr/bin:/bin:...),
 // which misses Homebrew, nvm, ~/.local/bin and friends (docs/spike/m0-step4 T1).
 // Asking the user's login shell is the most faithful way to recover it.
-func probeLoginShell(ctx context.Context) ([]string, error) {
+func probeLoginShell(ctx context.Context) (dirs, proxyEnv []string, err error) {
 	shell := userShell()
-	script := `printf '` + pathBegin + `%s` + pathEnd + `' "$PATH"`
+	// grep keeps only proxy variables, so no other environment value (API
+	// keys, tokens) ever reaches Kikri.
+	script := `printf '` + pathBegin + `%s` + pathEnd + `' "$PATH"; ` +
+		`printf '` + envBegin + `\n'; env | grep -iE '^(https?|all|no)_proxy='; printf '` + envEnd + `'`
 	res, err := proc.Run(ctx, proc.Spec{
 		Path:    shell,
 		Args:    []string{"-ilc", script},
 		Timeout: 5 * time.Second,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if res.TimedOut {
-		return nil, errTimeout(shell)
+		return nil, nil, errTimeout(shell)
 	}
-	return parseShellPATH(string(res.Stdout))
+	out := string(res.Stdout)
+	if dirs, err = parseShellPATH(out); err != nil {
+		return nil, nil, err
+	}
+	return dirs, parseProxyEnv(out), nil
+}
+
+// parseProxyEnv extracts NAME=value lines for known proxy variables from
+// between the env markers.
+func parseProxyEnv(out string) []string {
+	i := strings.LastIndex(out, envBegin)
+	if i < 0 {
+		return nil
+	}
+	rest := out[i+len(envBegin):]
+	if j := strings.Index(rest, envEnd); j >= 0 {
+		rest = rest[:j]
+	}
+	var env []string
+	for _, line := range strings.Split(rest, "\n") {
+		line = strings.TrimRight(line, "\r")
+		k, v, ok := strings.Cut(line, "=")
+		if ok && v != "" && proxyVars[strings.ToLower(k)] {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
+}
+
+// redactProxy turns a proxy URL into scheme://host:port, dropping any
+// user:password. Unparseable values are reported as "(set)".
+func redactProxy(v string) string {
+	if !strings.Contains(v, "://") {
+		v = "http://" + v
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Host == "" {
+		return "(set)"
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// displayProxy picks the proxy the CLIs would use for HTTPS.
+func displayProxy(env []string) string {
+	vals := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		vals[strings.ToLower(k)] = v
+	}
+	for _, k := range []string{"https_proxy", "all_proxy"} {
+		if v := vals[k]; v != "" {
+			return redactProxy(v)
+		}
+	}
+	return ""
 }
 
 type shellError string
@@ -178,15 +250,17 @@ func BuildSearchPath(ctx context.Context) SearchPath {
 		}
 	}
 	if runtime.GOOS != "windows" {
-		dirs, err := probeLoginShell(ctx)
+		dirs, proxyEnv, err := probeLoginShell(ctx)
 		if err != nil {
 			sp.LoginShellError = err.Error()
 		}
 		add(dirs, SourceLoginShell)
+		sp.ProxyEnv = proxyEnv
 	}
 	add(splitList(os.Getenv("PATH")), SourceProcessPATH)
 	home, _ := os.UserHomeDir()
 	add(fallbackDirs(home), SourceFallback)
+	sp.Proxy = displayProxy(sp.Env())
 	return sp
 }
 
@@ -199,15 +273,25 @@ func (sp SearchPath) PATH() string {
 	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
-// Env returns the current environment with PATH replaced by the search path.
+// Env returns the current environment with PATH replaced by the search path
+// and the login shell's proxy variables added where Kikri's own environment
+// does not already set them.
 func (sp SearchPath) Env() []string {
 	env := os.Environ()
-	out := make([]string, 0, len(env)+1)
+	out := make([]string, 0, len(env)+len(sp.ProxyEnv)+1)
+	have := map[string]bool{}
 	for _, kv := range env {
-		if k, _, ok := strings.Cut(kv, "="); ok && strings.EqualFold(k, "PATH") {
+		k, _, ok := strings.Cut(kv, "=")
+		if ok && strings.EqualFold(k, "PATH") {
 			continue
 		}
+		have[k] = true
 		out = append(out, kv)
+	}
+	for _, kv := range sp.ProxyEnv {
+		if k, _, _ := strings.Cut(kv, "="); !have[k] {
+			out = append(out, kv)
+		}
 	}
 	return append(out, "PATH="+sp.PATH())
 }

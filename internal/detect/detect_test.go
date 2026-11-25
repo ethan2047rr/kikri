@@ -28,7 +28,7 @@ func TestParseShellPATHIgnoresNoise(t *testing.T) {
 
 func TestProbeLoginShellReturnsPATH(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
-	dirs, err := probeLoginShell(context.Background())
+	dirs, _, err := probeLoginShell(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +60,30 @@ func TestFindPrefersEarlierDirsAndSkipsNonExecutables(t *testing.T) {
 	}
 	if _, _, ok := sp.Find("codex"); ok {
 		t.Fatal("found a binary that does not exist")
+	}
+}
+
+func TestParseProxyEnvKeepsOnlyProxyVars(t *testing.T) {
+	out := "banner\n" + pathBegin + "/usr/bin" + pathEnd + envBegin + "\n" +
+		"HTTPS_PROXY=http://u:secret@127.0.0.1:7890\nno_proxy=localhost\nANTHROPIC_API_KEY=sk-x\nall_proxy=\n" + envEnd
+	got := parseProxyEnv(out)
+	if strings.Join(got, "|") != "HTTPS_PROXY=http://u:secret@127.0.0.1:7890|no_proxy=localhost" {
+		t.Fatalf("got %v", got)
+	}
+	if p := displayProxy(got); p != "http://127.0.0.1:7890" {
+		t.Fatalf("displayProxy = %q", p)
+	}
+}
+
+func TestEnvAddsShellProxyWithoutOverriding(t *testing.T) {
+	t.Setenv("http_proxy", "http://own:1")
+	sp := SearchPath{ProxyEnv: []string{"https_proxy=http://shell:2", "http_proxy=http://shell:3"}}
+	env := strings.Join(sp.Env(), "\n")
+	if !strings.Contains(env, "https_proxy=http://shell:2") {
+		t.Fatal("shell proxy not added")
+	}
+	if strings.Contains(env, "http://shell:3") || !strings.Contains(env, "http_proxy=http://own:1") {
+		t.Fatal("process proxy must win over the shell's")
 	}
 }
 

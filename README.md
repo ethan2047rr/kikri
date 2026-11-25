@@ -21,6 +21,9 @@ make app        # 打包 bin/Kikri.app（macOS，未签名）
 make windows    # 交叉编译 bin/kikri.exe
 make test vet   # Go 测试、go vet、TypeScript 类型检查
 make diagnose   # 不启动界面，以 JSON 打印环境探测结果
+
+./bin/kikri -wake claude -dry-run   # 打印将要执行的唤醒命令，不发送
+./bin/kikri -wake codex             # 真的发一次唤醒并打印结果（会开启该套餐的 5 小时窗口）
 ```
 
 - `KIKRI_HOME=<dir>`：改用别的数据目录（默认 macOS 为 `~/Library/Application Support/Kikri`，Windows 为 `%AppData%\Kikri`）
@@ -29,10 +32,11 @@ make diagnose   # 不启动界面，以 JSON 打印环境探测结果
 目录结构：
 
 ```
-main.go              入口（-diagnose / -version）
+main.go              入口（-diagnose / -wake / -version）
 internal/app         Wails 应用：托盘、弹出窗口、前端调用的 Service
 internal/detect      CLI 路径探测（登录 shell → 进程 PATH → 常见路径）、版本、登录状态
 internal/appdir      数据目录与空的 sandbox 目录
+internal/wake        唤醒执行器：隔离命令、输出解析、错误分类、网络探测、文件锁
 internal/proc        子进程：stdin 接空设备、强制超时、杀掉整个进程组
 internal/gui/assets  前端静态文件（app.js 由 frontend/ 编译生成）
 frontend/            TypeScript 源码（esbuild 打包，tsc 类型检查）

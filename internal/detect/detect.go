@@ -4,6 +4,8 @@ package detect
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -126,16 +128,38 @@ func detectTool(ctx context.Context, t Tool, sp SearchPath, env []string, opts O
 	if t.parseAuth == nil {
 		return st
 	}
-	res, err := run(t.AuthArgs, authTimeout)
-	switch {
-	case err != nil:
+	auth, err := checkAuth(ctx, t, st.Path, env, opts.Dir)
+	if err != nil {
 		st.Error = err.Error()
-	case res.TimedOut:
-		st.Error = "login check timed out"
-	default:
-		if st.Auth, err = t.parseAuth(res); err != nil {
-			st.Error = err.Error()
+	}
+	st.Auth = auth
+	return st
+}
+
+// ErrNoAuthCheck is returned by CheckAuth for tools without a login check.
+var ErrNoAuthCheck = errors.New("detect: no login check for this tool")
+
+// CheckAuth runs one tool's local login check (no network request to the
+// model API; PRD F2.6 step 1).
+func CheckAuth(ctx context.Context, toolID, path string, env []string, dir string) (*AuthInfo, error) {
+	for _, t := range Tools {
+		if t.ID == toolID {
+			if t.parseAuth == nil {
+				return nil, ErrNoAuthCheck
+			}
+			return checkAuth(ctx, t, path, env, dir)
 		}
 	}
-	return st
+	return nil, fmt.Errorf("detect: unknown tool %q", toolID)
+}
+
+func checkAuth(ctx context.Context, t Tool, path string, env []string, dir string) (*AuthInfo, error) {
+	res, err := proc.Run(ctx, proc.Spec{Path: path, Args: t.AuthArgs, Dir: dir, Env: env, Timeout: authTimeout})
+	switch {
+	case err != nil:
+		return nil, err
+	case res.TimedOut:
+		return nil, errors.New("login check timed out")
+	}
+	return t.parseAuth(res)
 }
