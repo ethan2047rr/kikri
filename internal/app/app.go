@@ -95,12 +95,22 @@ func Run(version string) error {
 	tray.SetMenu(menu)
 	tray.AttachWindow(popup).WindowOffset(5)
 
+	schedCtx, stopScheduler := context.WithCancel(context.Background())
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		go func() {
 			svc.Prepare()
+			svc.StartScheduler(schedCtx)
 			svc.Refresh(context.Background())
 		}()
 	})
+	// After sleep, check right away instead of waiting for the next tick:
+	// missed slots are made up as soon as the network is back (F4.1).
+	app.Event.OnApplicationEvent(events.Common.SystemDidWake, func(*application.ApplicationEvent) {
+		svc.Kick()
+	})
 
-	return app.Run()
+	err := app.Run()
+	stopScheduler()
+	svc.Close()
+	return err
 }
