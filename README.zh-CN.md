@@ -12,7 +12,16 @@
 - 显示每个窗口几点刷新、用了多少
 - macOS + Windows，中文 / English，Go + Wails v3
 
-> 状态：v0.1 准备发布。macOS 上已日常使用；Windows 版能编译，但还没在真机上验证。
+> Kikri 会用你自己的 Claude / ChatGPT 订阅发出真实请求。使用前请确认定时请求符合你所用套餐的服务条款。
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/images/status-zh-dark.png">
+    <img src=".github/images/status-zh-light.png" width="408" alt="Kikri 菜单栏弹窗：每个套餐的 5 小时窗口几点刷新、用了多少">
+  </picture>
+</p>
+
+> 状态：v0.1，早期版本。macOS 上已日常使用；Windows 版能编译，但还没在真机上验证。
 
 ## 工作原理
 

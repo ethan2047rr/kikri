@@ -12,7 +12,16 @@ A free, open-source menu bar / system tray app. On a schedule you choose, it sen
 - Shows when each window resets and how much of it you have used
 - macOS and Windows, English and Chinese. Built with Go and Wails v3
 
-> Status: v0.1 is about to be released. Used daily on macOS; the Windows build compiles but has not been tested on a real machine yet.
+> Kikri sends real requests through your own Claude / ChatGPT subscription. Make sure scheduled requests fit your plan's terms before you use it.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/images/status-en-dark.png">
+    <img src=".github/images/status-en-light.png" width="408" alt="Kikri's menu bar popup: when each plan's 5-hour window resets and how much of it is used">
+  </picture>
+</p>
+
+> Status: v0.1, an early release. Used daily on macOS; the Windows build compiles but has not been tested on a real machine yet.
 
 ## How it works
 
