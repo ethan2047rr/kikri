@@ -8,6 +8,8 @@
   <string>Kikri</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.ethan2047rr.kikri</string>
+  <key>CFBundleIconFile</key>
+  <string>Kikri</string>
   <key>CFBundleExecutable</key>
   <string>kikri</string>
   <key>CFBundlePackageType</key>

@@ -10,7 +10,6 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/icons"
 
 	"github.com/ethan2047rr/kikri/internal/gui"
 )
@@ -79,10 +78,10 @@ func Run(version string) error {
 	tray := app.SystemTray.New()
 	tray.SetTooltip("Kikri")
 	if runtime.GOOS == "darwin" {
-		tray.SetTemplateIcon(icons.SystrayMacTemplate) // TODO(M4): rooster icon
+		tray.SetTemplateIcon(trayTemplateIcon)
 	} else {
-		tray.SetIcon(icons.SystrayLight)
-		tray.SetDarkModeIcon(icons.SystrayDark)
+		tray.SetIcon(trayLightIcon)
+		tray.SetDarkModeIcon(trayDarkIcon)
 	}
 
 	menu := app.NewMenu()

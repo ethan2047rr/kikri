@@ -42,3 +42,5 @@ build/darwin         Info.plist（LSUIElement：只在菜单栏显示）
 ## License
 
 [MIT](LICENSE)
+
+图标来自 Microsoft [Fluent UI Emoji](https://github.com/microsoft/fluentui-emoji) 的「Baby chick」（MIT，Copyright (c) Microsoft Corporation），镜像后使用，详见 [build/icons](build/icons/README.md)。

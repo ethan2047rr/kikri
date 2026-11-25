@@ -12,7 +12,7 @@ export CGO_CFLAGS  := -mmacosx-version-min=13.0
 export CGO_LDFLAGS := -mmacosx-version-min=13.0
 endif
 
-.PHONY: all frontend typecheck build run diagnose test vet app windows clean
+.PHONY: all frontend typecheck build run diagnose test vet app windows clean icons
 
 all: build
 
@@ -46,7 +46,15 @@ app: build
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS
 	cp $(BIN)/kikri $(APP)/Contents/MacOS/kikri
+	mkdir -p $(APP)/Contents/Resources
+	cp build/darwin/Kikri.icns $(APP)/Contents/Resources/Kikri.icns
 	sed 's/__VERSION__/$(VERSION)/g' build/darwin/Info.plist > $(APP)/Contents/Info.plist
+
+# Re-render tray PNGs and the app icon from build/icons/*.svg (macOS 14+).
+icons:
+	swift build/icons/render.swift .
+	iconutil -c icns build/darwin/Kikri.iconset -o build/darwin/Kikri.icns
+	rm -rf build/darwin/Kikri.iconset
 
 # Windows GUI binary (no console window), cross-compiled without cgo.
 windows: frontend
