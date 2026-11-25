@@ -1,10 +1,11 @@
 import { cleanVersion, LOGIN_COMMAND, planTitle, toolFor } from "./format";
-import type { PlanStatus, Preset, Snapshot, WakeResult } from "./types";
-import { attempt, call, chip, h, segmented } from "./ui";
+import { logo } from "./logos";
+import { presetFor, scheduleEditor } from "./schedule-ui";
+import type { PlanStatus, Snapshot, WakeResult } from "./types";
+import { attempt, call, chip, h } from "./ui";
 
-const WORKDAYS = [false, true, true, true, true, true, false];
 
-let preset: Preset = "early-bird";
+let schedule = { times: ["06:30"], weekdays: [false, true, true, true, true, true, false] };
 let startAtLogin = true;
 let testing = false;
 let results: { plan: string; title: string; res?: WakeResult; err?: string }[] = [];
@@ -26,6 +27,7 @@ function toolRow(snap: Snapshot, ps: PlanStatus): HTMLElement {
     c = chip("未登录", "bad");
   } else { sub = `${t.name} ${cleanVersion(t.version)}`.trim(); c = chip("已登录", "ok"); }
   return h("div", { class: t?.found || !snap.detectedOnce ? "row" : "row absent" },
+    logo(ps.plan.tool, 20),
     h("div", { class: "row-text" }, h("span", { class: "row-name" }, planTitle(snap, ps)), h("span", { class: "row-sub" }, sub)), c);
 }
 
@@ -61,7 +63,10 @@ function resultLine(r: (typeof results)[number]): HTMLElement {
 async function finish(snap: Snapshot): Promise<void> {
   for (const p of snap.plans ?? []) {
     if (ready(snap, p)) {
-      await call("SetPlan", p.plan.id, { ...p.schedule, enabled: true, preset, times: null, weekdays: WORKDAYS });
+      const preset = presetFor(schedule.times);
+      await call("SetPlan", p.plan.id, {
+        ...p.schedule, enabled: true, preset, times: preset === "custom" ? schedule.times : null, weekdays: schedule.weekdays,
+      });
     }
   }
   await call("FinishOnboarding", startAtLogin);
@@ -71,10 +76,6 @@ export function renderOnboarding(snap: Snapshot, redraw: () => void): HTMLElemen
   rerender = redraw;
   const plans = snap.plans ?? [];
   const anyReady = plans.some((p) => ready(snap, p));
-  const hint = preset === "early-bird"
-    ? h("span", { class: "row-sub" }, "工作日 ", h("b", null, "06:30"), " 唤醒，", h("b", null, "11:30"), " 就能用上第 2 轮额度")
-    : h("span", { class: "row-sub" }, "工作日 ", h("b", null, "06:00"), " 唤醒；", h("b", null, "11:05"), " 没有窗口在跑时再唤醒一次");
-
   const test = h("div", { class: "panel pad stack-xs" },
     results.length ? results.map(resultLine) : h("span", { class: "row-sub" }, "可选：现在发一条真实请求试试。会开启这个套餐的 5 小时窗口。"),
     h("button", {
@@ -89,11 +90,8 @@ export function renderOnboarding(snap: Snapshot, redraw: () => void): HTMLElemen
         h("p", { class: "lead" }, "每天清晨替你发一条极小的请求，让 5 小时额度窗口提前开始。")),
       h("section", { class: "stack-xs" }, h("span", { class: "section-label" }, "在这台电脑上找到"),
         h("div", { class: "panel" }, plans.map((p) => toolRow(snap, p)))),
-      h("section", { class: "stack-xs" }, h("span", { class: "section-label" }, "选一个排班"),
-        segmented<Preset>([{ value: "early-bird", label: "早鸟" }, { value: "three", label: "三轮" }], preset,
-          (v) => { preset = v; rerender(); }, "排班预设"),
-        hint,
-        h("span", { class: "row-sub" }, "之后可以在设置里改时间和星期")),
+      h("section", { class: "stack-xs" }, h("span", { class: "section-label" }, "什么时候唤醒"),
+        h("div", { class: "panel pad" }, scheduleEditor(schedule, (v) => { schedule = { times: v.times, weekdays: v.weekdays }; rerender(); }))),
       test,
       h("label", { class: "check" },
         h("input", { type: "checkbox", checked: startAtLogin, onchange: (e: Event) => { startAtLogin = (e.target as HTMLInputElement).checked; } }),

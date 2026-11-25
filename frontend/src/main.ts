@@ -1,5 +1,4 @@
 import { Events } from "/wails/runtime.js";
-import { scheduleSummary } from "./format";
 import { loadLog, renderLog } from "./log";
 import { renderOnboarding } from "./onboarding";
 import { renderSettings } from "./settings";
@@ -9,34 +8,36 @@ import { call, h } from "./ui";
 
 const EVENT_SNAPSHOT = "kikri:snapshot";
 
-type Tab = "status" | "log" | "settings";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "status", label: "状态" },
-  { id: "log", label: "日志" },
-  { id: "settings", label: "设置" },
-];
+// The status cards are home; settings sits behind the gear icon and the
+// log behind a row in settings.
+type Page = "status" | "settings" | "log";
+const PARENT: Record<Page, Page | null> = { status: null, settings: "status", log: "settings" };
+const TITLE: Record<Page, string> = { status: "Kikri", settings: "设置", log: "唤醒记录" };
 
 let snap: Snapshot | null = null;
-let tab: Tab = "status";
+let page: Page = "status";
 let pending = false; // a render waits for the focused input to blur
 
-function headerNote(s: Snapshot): string {
-  if (tab === "settings") return "设置会自动保存";
-  const on = (s.plans ?? []).filter((p) => p.schedule.enabled);
-  if (on.length === 0) return "";
-  const summaries = new Set(on.map((p) => scheduleSummary(p.schedule, p.times)));
-  return summaries.size === 1 ? [...summaries][0]! : `${on.length} 个套餐`;
+function go(p: Page): void {
+  page = p;
+  render();
 }
 
-function header(s: Snapshot): HTMLElement {
-  return h("header", { class: "top" },
-    h("div", { class: "row-between" },
+const GEAR = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+
+function header(): HTMLElement {
+  const parent = PARENT[page];
+  if (!parent) {
+    const gear = h("button", { type: "button", class: "icon-btn", "aria-label": "设置", title: "设置 (⌘,)", onclick: () => go("settings") });
+    gear.innerHTML = GEAR; // static markup
+    return h("header", { class: "top row-between" },
       h("div", { class: "brand" }, h("img", { src: "/chick.svg", alt: "", width: "20", height: "20" }), h("span", { class: "name" }, "Kikri")),
-      h("span", { class: "header-note" }, headerNote(s))),
-    h("nav", { class: "seg tabs", "aria-label": "视图" }, TABS.map((t) => h("button", {
-      type: "button", class: t.id === tab ? "on" : "", "aria-current": t.id === tab ? "page" : undefined,
-      onclick: () => { tab = t.id; render(); },
-    }, t.label))));
+      gear);
+  }
+  return h("header", { class: "top row-between" },
+    h("button", { type: "button", class: "back", "aria-label": `返回${TITLE[parent] === "Kikri" ? "状态" : TITLE[parent]}`, onclick: () => go(parent) },
+      h("span", { class: "chevron", "aria-hidden": "true" }, "‹"), h("span", { class: "name" }, TITLE[page])),
+    page === "settings" && h("span", { class: "header-note" }, "设置会自动保存"));
 }
 
 function render(): void {
@@ -54,26 +55,26 @@ function render(): void {
   }
   const scroller = root.querySelector(".scroll");
   const scrollTop = scroller?.scrollTop ?? 0;
-  const prevTab = root.dataset.tab;
+  const prevPage = root.dataset.page;
 
   if (!s.prefs.onboarded && !s.storeError && !s.appDirError) {
-    root.dataset.tab = "onboarding";
+    root.dataset.page = "onboarding";
     root.replaceChildren(renderOnboarding(s, render));
   } else {
     let view: HTMLElement;
-    if (tab === "log") {
+    if (page === "log") {
       loadLog(s, render);
       view = renderLog(s);
-    } else if (tab === "settings") {
-      view = renderSettings(s, render);
+    } else if (page === "settings") {
+      view = renderSettings(s, render, () => go("log"));
     } else {
-      view = renderStatus(s, () => { tab = "settings"; render(); });
+      view = renderStatus(s, () => go("settings"));
     }
-    root.dataset.tab = tab;
-    root.replaceChildren(header(s), view);
+    root.dataset.page = page;
+    root.replaceChildren(header(), view);
   }
   const next = root.querySelector(".scroll");
-  if (next && prevTab === root.dataset.tab) next.scrollTop = scrollTop;
+  if (next && prevPage === root.dataset.page) next.scrollTop = scrollTop;
 }
 
 async function main(): Promise<void> {
@@ -82,10 +83,12 @@ async function main(): Promise<void> {
   render();
   // Countdowns and "today" labels.
   setInterval(render, 30_000);
+  // ⌘, opens settings; ⌘[ goes back (Esc already hides the popup).
   document.addEventListener("keydown", (e) => {
-    if (!e.metaKey && !e.ctrlKey) return;
-    const i = ["1", "2", "3"].indexOf(e.key);
-    if (i >= 0 && snap?.prefs.onboarded) { tab = TABS[i]!.id; render(); }
+    if (!(e.metaKey || e.ctrlKey) || !snap?.prefs.onboarded) return;
+    if (e.key === ",") go("settings");
+    const parent = PARENT[page];
+    if (e.key === "[" && parent) go(parent);
   });
 }
 

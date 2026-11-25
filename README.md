@@ -57,3 +57,5 @@ build/darwin         Info.plist（LSUIElement：只在菜单栏显示）
 [MIT](LICENSE)
 
 图标来自 Microsoft [Fluent UI Emoji](https://github.com/microsoft/fluentui-emoji) 的「Baby chick」（MIT，Copyright (c) Microsoft Corporation），镜像后使用，详见 [build/icons](build/icons/README.md)。
+
+弹出窗口里的 Claude 和 OpenAI 标志来自 [lobe-icons](https://github.com/lobehub/lobe-icons)（MIT，Copyright (c) 2023 LobeHub），见 `frontend/src/logos.ts`。这些标志是 Anthropic 和 OpenAI 的商标，Kikri 只用它们标明卡片对应哪个服务，与这两家公司没有关联。

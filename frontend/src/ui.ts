@@ -76,3 +76,53 @@ export async function attempt(fn: () => Promise<unknown>): Promise<void> {
     toast(err instanceof Error ? err.message : String(err), true);
   }
 }
+
+/** Parses "6:30", "06:30", "630", "0630", "18" or "18.30" into "HH:MM" (24-hour). */
+export function parseTime(raw: string): string | null {
+  const s = raw.trim().replace(/[：.\s]/g, ":");
+  let hh: number;
+  let mm: number;
+  const m = s.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (m) {
+    hh = Number(m[1]);
+    mm = Number(m[2]);
+  } else if (/^\d{1,4}$/.test(s)) {
+    if (s.length <= 2) { hh = Number(s); mm = 0; } else { hh = Number(s.slice(0, -2)); mm = Number(s.slice(-2)); }
+  } else return null;
+  if (hh > 23 || mm > 59) return null;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+/**
+ * A 24-hour time field. Native <input type="time"> follows the system's
+ * 12/24-hour setting, which a page cannot override. Commits on Enter or
+ * blur; ↑/↓ step an hour (15 minutes with Shift); invalid input reverts.
+ */
+export function timeField(value: string, onCommit: (hhmm: string) => void, ariaLabel: string, id?: string): HTMLInputElement {
+  const input = h("input", {
+    type: "text", class: "time-input", value, id, "aria-label": ariaLabel,
+    inputmode: "numeric", autocomplete: "off", spellcheck: false, maxlength: "5", placeholder: "HH:MM",
+  });
+  let committed = value;
+  const commit = () => {
+    const t = parseTime(input.value);
+    if (!t) { input.value = committed; return; }
+    input.value = t;
+    if (t !== committed) { committed = t; onCommit(t); }
+  };
+  input.addEventListener("focus", () => input.select());
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    else if (e.key === "Escape") { input.value = committed; input.blur(); e.stopPropagation(); }
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      const t = parseTime(input.value) ?? committed;
+      const [hh, mm] = t.split(":").map(Number);
+      const step = (e.shiftKey ? 15 : 60) * (e.key === "ArrowUp" ? 1 : -1);
+      const total = (((hh! * 60 + mm! + step) % 1440) + 1440) % 1440;
+      input.value = `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+    }
+  });
+  return input;
+}

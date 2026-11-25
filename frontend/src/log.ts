@@ -1,5 +1,6 @@
 import { dayLabel, hhmm, outcomeChip, planTitle, resultDetail } from "./format";
 import type { Entry, Snapshot } from "./types";
+import { logo } from "./logos";
 import { attempt, call, chip, h } from "./ui";
 
 let cache: { version: number; entries: Entry[] } | null = null;
@@ -18,6 +19,7 @@ export function loadLog(snap: Snapshot, done: () => void): void {
 
 export function renderLog(snap: Snapshot): HTMLElement {
   const names = new Map((snap.plans ?? []).map((p) => [p.plan.id, planTitle(snap, p)]));
+  const tools = new Map((snap.plans ?? []).map((p) => [p.plan.id, p.plan.tool]));
   const body = h("div", { class: "body stack-sm scroll" });
   const entries = cache?.entries ?? [];
 
@@ -40,7 +42,7 @@ export function renderLog(snap: Snapshot): HTMLElement {
           return h("div", { class: "row log-row" },
             h("span", { class: "num strong" }, hhmm(e.startedAt)),
             h("div", { class: "row-text" },
-              h("span", { class: "row-name" }, names.get(e.plan) ?? e.plan),
+              h("span", { class: "row-name with-logo" }, logo(tools.get(e.plan) ?? "", 14), names.get(e.plan) ?? e.plan),
               h("span", { class: "row-sub", title: e.result?.message ?? detail }, detail)),
             chip(c.label, c.tone));
         }))));
