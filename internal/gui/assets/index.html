@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Kikri</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="name">Kikri</span>
+      <span class="version" id="version"></span>
+    </div>
+    <button id="refresh" class="btn" type="button">重新检测</button>
+  </header>
+
+  <main>
+    <section>
+      <h2>编程工具</h2>
+      <ul id="tools" class="tools" aria-live="polite">
+        <li class="placeholder">正在检测…</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>运行环境</h2>
+      <dl class="env">
+        <dt>数据目录</dt><dd id="appdir">—</dd>
+        <dt>隔离目录</dt><dd id="sandbox">—</dd>
+        <dt>PATH 来源</dt><dd id="pathsource">—</dd>
+      </dl>
+      <details>
+        <summary>搜索路径（<span id="dircount">0</span>）</summary>
+        <ol id="dirs" class="dirs"></ol>
+      </details>
+    </section>
+  </main>
+
+  <footer class="foot" id="checked"></footer>
+</body>
+</html>

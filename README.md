@@ -9,7 +9,35 @@
 - 睡眠、断网后按规则补发；用官方额度数据跳过已经在跑的窗口
 - macOS + Windows，Go + Wails v3
 
-> 状态：开发中（M1 骨架）。
+> 状态：开发中（M1 骨架：托盘 + CLI 探测 + 隔离目录）。
+
+## 开发
+
+需要 Go 1.27+ 和 Node.js（只用于编译 TypeScript 前端）。
+
+```bash
+make run        # 编译并启动托盘应用
+make app        # 打包 bin/Kikri.app（macOS，未签名）
+make windows    # 交叉编译 bin/kikri.exe
+make test vet   # Go 测试、go vet、TypeScript 类型检查
+make diagnose   # 不启动界面，以 JSON 打印环境探测结果
+```
+
+- `KIKRI_HOME=<dir>`：改用别的数据目录（默认 macOS 为 `~/Library/Application Support/Kikri`，Windows 为 `%AppData%\Kikri`）
+- `KIKRI_DEBUG=1`：打开 Wails 调试日志
+
+目录结构：
+
+```
+main.go              入口（-diagnose / -version）
+internal/app         Wails 应用：托盘、弹出窗口、前端调用的 Service
+internal/detect      CLI 路径探测（登录 shell → 进程 PATH → 常见路径）、版本、登录状态
+internal/appdir      数据目录与空的 sandbox 目录
+internal/proc        子进程：stdin 接空设备、强制超时、杀掉整个进程组
+internal/gui/assets  前端静态文件（app.js 由 frontend/ 编译生成）
+frontend/            TypeScript 源码（esbuild 打包，tsc 类型检查）
+build/darwin         Info.plist（LSUIElement：只在菜单栏显示）
+```
 
 ## License
 
