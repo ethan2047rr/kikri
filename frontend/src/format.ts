@@ -109,6 +109,7 @@ export function outcomeChip(e: Entry): { label: string; tone: Tone } {
     case "ok":
       if (e.trigger === "makeup") return { label: "补发成功", tone: "ok" };
       if (e.trigger === "retry") return { label: "重试成功", tone: "ok" };
+      if (e.trigger === "deferred") return { label: "顺延成功", tone: "ok" };
       return { label: "成功", tone: "ok" };
     case "skipped": return { label: "已跳过", tone: "warn" };
     case "offline": return { label: "等待网络", tone: "warn" };
@@ -126,6 +127,8 @@ export function outcomeChip(e: Entry): { label: string; tone: Tone } {
 /** Translates the reasons Kikri itself writes; CLI errors stay as they are. */
 export function reasonText(msg: string | undefined): string {
   if (!msg) return "";
+  const deferred = msg.match(/^(.*); deferred to (\d\d:\d\d)$/);
+  if (deferred) return `${reasonText(deferred[1])}，顺延到 ${deferred[2]} 再唤醒`;
   const rules: [RegExp, (m: RegExpMatchArray) => string][] = [
     [/^a window is already running; it resets at (\d\d:\d\d)$/, (m) => `窗口已在跑，${m[1]} 刷新`],
     [/^the window opened by the (\d\d:\d\d) wake runs until (\d\d:\d\d)$/, (m) => `${m[1]} 唤醒的窗口要到 ${m[2]} 才刷新`],
@@ -134,6 +137,7 @@ export function reasonText(msg: string | undefined): string {
     [/^this plan has no 5-hour window \((.*)\)$/, (m) => `这个套餐没有 5 小时窗口（${m[1]}）`],
     [/^paused for today$/, () => "今天已暂停"],
     [/^still failing \(no network\?\) when the make-up deadline (\d\d:\d\d) passed$/, (m) => `一直没联网，过了补发截止时间 ${m[1]}`],
+    [/^deferred wake missed .* when the make-up deadline (\d\d:\d\d) passed$/, (m) => `顺延的唤醒没赶上（电脑没开），${m[1]} 后不再补`],
     [/^(.*) when the make-up deadline (\d\d:\d\d) passed$/, (m) => `电脑没开或没联网，过了补发截止时间 ${m[2]}`],
   ];
   for (const [re, f] of rules) {
@@ -149,6 +153,7 @@ export function resultDetail(e: Entry, withReset = true): string {
   const parts: string[] = [];
   if (e.trigger === "makeup") parts.push("开盖后补发");
   if (e.trigger === "manual") parts.push("手动");
+  if (e.trigger === "deferred") parts.push("刷新后顺延");
   if (e.outcome === "ok" && r) {
     if (r.durationMs) parts.push(`${(r.durationMs / 1000).toFixed(1)}s`);
     if (r.usage) parts.push(`${r.usage.inputTokens.toLocaleString("en-US")} tokens`);

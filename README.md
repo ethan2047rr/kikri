@@ -44,6 +44,7 @@ internal/scheduler   调度引擎：每 30 秒检查、补发、重试、Smart S
 internal/store       SQLite：设置、每个时间点的状态、唤醒日志
 internal/quota       Codex 额度只读查询（app-server）
 internal/activity    会话文件修改时间（只读 mtime，不读内容）
+internal/statusline  可选：从 Claude Code 状态栏数据读取 Claude 的刷新时间（设置里打开，关掉即还原）
 internal/proc        子进程：stdin 接空设备、强制超时、杀掉整个进程组
 internal/autostart   开机自启（macOS LaunchAgent / Windows 注册表 Run）
 internal/gui/assets  前端静态文件（app.js 由 frontend/ 编译生成）

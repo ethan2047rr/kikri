@@ -10,6 +10,7 @@ import (
 	"github.com/ethan2047rr/kikri/internal/detect"
 	"github.com/ethan2047rr/kikri/internal/quota"
 	"github.com/ethan2047rr/kikri/internal/scheduler"
+	"github.com/ethan2047rr/kikri/internal/statusline"
 	"github.com/ethan2047rr/kikri/internal/store"
 	"github.com/ethan2047rr/kikri/internal/wake"
 )
@@ -63,6 +64,7 @@ func runWake(ctx context.Context, layout appdir.Layout, toolID string, skip func
 // newEngine connects the scheduler to the real CLIs, quota query and
 // session activity.
 func newEngine(layout appdir.Layout, st *store.Store, onChange func(), onSlot func(scheduler.PlanDef, store.Slot, wake.Result)) *scheduler.Engine {
+	slPaths, slErr := statusline.DefaultPaths(layout.Root)
 	return scheduler.New(scheduler.Deps{
 		Store: st,
 		Wake: func(ctx context.Context, plan scheduler.PlanDef, skip func(context.Context) (string, bool)) wake.Result {
@@ -74,6 +76,16 @@ func newEngine(layout appdir.Layout, st *store.Store, onChange func(), onSlot fu
 				return nil, err
 			}
 			return quota.ReadCodex(ctx, bin, env, layout.Sandbox)
+		},
+		ReportedFiveHour: func(plan scheduler.PlanDef) (time.Time, time.Time) {
+			if plan.Tool != "claude" || slErr != nil {
+				return time.Time{}, time.Time{}
+			}
+			d, err := statusline.Read(slPaths.Data)
+			if err != nil || d == nil || d.FiveHour == nil {
+				return time.Time{}, time.Time{}
+			}
+			return d.FiveHour.ResetsAt, d.At
 		},
 		LastActivity: func(plan scheduler.PlanDef) time.Time {
 			switch plan.Tool {

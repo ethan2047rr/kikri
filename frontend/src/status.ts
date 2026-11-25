@@ -27,6 +27,21 @@ function problem(snap: Snapshot, ps: PlanStatus, q: PlanQuota | undefined): stri
   return null;
 }
 
+/**
+ * The refresh time of a window the user opened themselves, bounded without
+ * any request: it started after the last known reset and no later than the
+ * last session activity, so it refreshes between those plus the window.
+ */
+function estimate(prev: QuotaWindow | undefined, lastUsed: string, windowMs: number): string | null {
+  if (!prev?.resetsAt || !isValidTime(prev.resetsAt)) return null;
+  const reset = Date.parse(prev.resetsAt);
+  const used = Date.parse(lastUsed);
+  if (!(used > reset && used - reset < windowMs)) return null;
+  const lo = new Date(reset + windowMs);
+  const hi = new Date(used + windowMs);
+  return hi.getTime() - lo.getTime() < 3 * 60_000 ? `约 ${hhmm(lo)} 刷新` : `预计 ${hhmm(lo)}–${hhmm(hi)} 刷新`;
+}
+
 /** The headline: refresh time if known, else "in use", else the next wake. */
 function headline(ps: PlanStatus, q: PlanQuota | undefined): { big: string; sub: string; showsNext: boolean } {
   const five = q?.fiveHour;
@@ -35,7 +50,11 @@ function headline(ps: PlanStatus, q: PlanQuota | undefined): { big: string; sub:
   }
   const windowMs = ps.plan.windowMins * 60_000;
   if (q?.lastUsed && Date.now() - Date.parse(q.lastUsed) < windowMs) {
-    return { big: "使用中", sub: `你 ${hhmm(q.lastUsed)} 用过，刷新时间未知`, showsNext: false };
+    const est = estimate(five, q.lastUsed, windowMs);
+    return { big: "使用中", sub: est ?? `你 ${hhmm(q.lastUsed)} 用过，刷新时间未知`, showsNext: false };
+  }
+  if (ps.deferred) {
+    return { big: hhmm(ps.deferred), sub: `顺延唤醒 · 还有 ${countdown(ps.deferred)}`, showsNext: true };
   }
   if (ps.next) {
     const day = whenLabel(ps.next).replace(/\s?\d\d:\d\d$/, "");
@@ -65,6 +84,12 @@ function footLine(snap: Snapshot, ps: PlanStatus, showsNext: boolean): { icon: s
   switch (last.outcome) {
     case "ok": return { icon: "✓", tone: "ok", text: [join(`${when} 已唤醒`)] };
     case "skipped":
+      if (ps.deferred) {
+        return {
+          icon: "–", tone: "muted", title: reasonText(last.result?.message),
+          text: [`${when} 窗口在跑，刷新后 ${hhmm(ps.deferred)} 再唤醒`],
+        };
+      }
       // Short here; the full reason is in the tooltip and the log.
       return {
         icon: "–", tone: "muted", title: reasonText(last.result?.message),

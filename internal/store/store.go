@@ -25,10 +25,11 @@ const (
 	SlotExpired    SlotState = "expired"    // missed and past its make-up deadline
 	SlotSuperseded SlotState = "superseded" // several slots were missed; a later one ran instead
 	SlotPaused     SlotState = "paused"     // "pause today" was on
+	SlotDeferred   SlotState = "deferred"   // skipped while a window ran; wakes again just after it refreshes
 )
 
 // Final reports whether the slot needs no more work.
-func (s SlotState) Final() bool { return s != SlotPending }
+func (s SlotState) Final() bool { return s != SlotPending && s != SlotDeferred }
 
 // Slot is the stored state of one slot.
 type Slot struct {

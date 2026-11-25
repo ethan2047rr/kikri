@@ -7,6 +7,7 @@ import { attempt, call, chip, h } from "./ui";
 
 let schedule = { times: ["06:30"], weekdays: [false, true, true, true, true, true, false] };
 let startAtLogin = true;
+let readStatusline = true; // D24, on by default
 let testing = false;
 let results: { plan: string; title: string; res?: WakeResult; err?: string }[] = [];
 let rerender: () => void = () => {};
@@ -69,7 +70,7 @@ async function finish(snap: Snapshot): Promise<void> {
       });
     }
   }
-  await call("FinishOnboarding", startAtLogin);
+  await call("FinishOnboarding", startAtLogin, readStatusline && toolFor(snap, "claude")?.found !== false);
 }
 
 export function renderOnboarding(snap: Snapshot, redraw: () => void): HTMLElement {
@@ -95,7 +96,11 @@ export function renderOnboarding(snap: Snapshot, redraw: () => void): HTMLElemen
       test,
       h("label", { class: "check" },
         h("input", { type: "checkbox", checked: startAtLogin, onchange: (e: Event) => { startAtLogin = (e.target as HTMLInputElement).checked; } }),
-        "登录电脑后自动启动 Kikri")),
+        "登录电脑后自动启动 Kikri"),
+      toolFor(snap, "claude")?.found !== false && h("label", { class: "check" },
+        h("input", { type: "checkbox", checked: readStatusline, onchange: (e: Event) => { readStatusline = (e.target as HTMLInputElement).checked; } }),
+        h("span", { class: "stack-xs" }, "读取 Claude Code 状态栏，显示准确的刷新时间",
+          h("span", { class: "row-sub" }, "在状态栏命令前加一层转发：原来的显示不变，没有状态栏的会显示一行额度；随时可在设置里关掉并还原")))),
     h("div", { class: "foot stack-sm" },
       h("button", {
         type: "button", class: "btn primary", disabled: !snap.detectedOnce,

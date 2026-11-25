@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/ethan2047rr/kikri/internal/quota"
 	"github.com/ethan2047rr/kikri/internal/schedule"
 	"github.com/ethan2047rr/kikri/internal/scheduler"
+	"github.com/ethan2047rr/kikri/internal/statusline"
 	"github.com/ethan2047rr/kikri/internal/store"
 	"github.com/ethan2047rr/kikri/internal/wake"
 )
@@ -27,6 +30,9 @@ const EventSnapshot = "kikri:snapshot"
 type Prefs struct {
 	Onboarded bool `json:"onboarded"`
 	Notify    bool `json:"notify"`
+	// StatuslineDecided: reading Claude Code's status line (on by default,
+	// D24) was set up or chosen once; Kikri never re-enables it after that.
+	StatuslineDecided bool `json:"statuslineDecided"`
 }
 
 const prefsKey = "app"
@@ -53,6 +59,8 @@ type Snapshot struct {
 	Stats             Stats                 `json:"stats"`
 	AgentsMd          *AgentsMd             `json:"agentsMd,omitempty"`
 	Waking            map[string]bool       `json:"waking"`
+	// ClaudeStatusline: whether Kikri reads Claude Code's status line (D24).
+	ClaudeStatusline *StatuslineState `json:"claudeStatusline,omitempty"`
 	// LogVersion changes whenever the log may have changed, so an open log
 	// view knows to reload.
 	LogVersion int64 `json:"logVersion"`
@@ -118,7 +126,95 @@ func (s *Service) Prepare() {
 	s.snap.Prefs, s.snap.Autostart = prefs, on
 	s.mu.Unlock()
 	s.engine = newEngine(layout, st, s.plansChanged, s.slotFinished)
+	// Users who finished onboarding before D24 get the default once; new
+	// users choose in onboarding.
+	if prefs.Onboarded && !prefs.StatuslineDecided {
+		s.enableStatuslineByDefault()
+	}
+	s.checkStatusline(true)
 	s.plansChanged()
+}
+
+// StatuslineState is the status line relay as the settings page shows it.
+type StatuslineState struct {
+	Installed bool       `json:"installed"`
+	At        *time.Time `json:"at,omitempty"` // last report from Claude Code
+	Error     string     `json:"error,omitempty"`
+}
+
+func (s *Service) statuslinePaths() (statusline.Paths, string, error) {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return statusline.Paths{}, "", err
+	}
+	p, err := statusline.DefaultPaths(s.Snapshot().AppDir.Root)
+	return p, exe, err
+}
+
+// checkStatusline refreshes the relay state. With repair, a relay pointing
+// at an old Kikri location (the app was moved) is updated.
+func (s *Service) checkStatusline(repair bool) {
+	st := &StatuslineState{}
+	if p, exe, err := s.statuslinePaths(); err != nil {
+		st.Error = err.Error()
+	} else if state, err := statusline.Status(p, exe); err != nil {
+		st.Error = err.Error()
+	} else {
+		if repair && state.Installed && state.Stale {
+			if err := statusline.Install(p, exe); err != nil {
+				st.Error = err.Error()
+			}
+		}
+		st.Installed = state.Installed
+		if d, _ := statusline.Read(p.Data); d != nil {
+			at := d.At
+			st.At = &at
+		}
+	}
+	s.mu.Lock()
+	s.snap.ClaudeStatusline = st
+	s.mu.Unlock()
+}
+
+// enableStatuslineByDefault applies D24's default once, only if Claude Code
+// has a config directory (it is installed and has been run).
+func (s *Service) enableStatuslineByDefault() {
+	p, exe, err := s.statuslinePaths()
+	if err != nil {
+		return
+	}
+	if fi, err := os.Stat(filepath.Dir(p.Settings)); err != nil || !fi.IsDir() {
+		return // no Claude Code yet: decide when it shows up
+	}
+	if err := statusline.Install(p, exe); err != nil {
+		slog.Warn("enable Claude Code status line", "err", err)
+	}
+	if err := s.updatePrefs(func(p *Prefs) { p.StatuslineDecided = true }); err != nil {
+		slog.Warn("save prefs", "err", err)
+	}
+}
+
+// SetClaudeStatusline turns reading Claude Code's status line on or off: it
+// edits statusLine in Claude Code's settings.json (backed up and restored).
+func (s *Service) SetClaudeStatusline(on bool) error {
+	p, exe, err := s.statuslinePaths()
+	if err != nil {
+		return err
+	}
+	if on {
+		err = statusline.Install(p, exe)
+	} else {
+		err = statusline.Uninstall(p)
+	}
+	if err == nil {
+		err = s.updatePrefs(func(p *Prefs) { p.StatuslineDecided = true })
+	}
+	s.checkStatusline(false)
+	s.plansChanged()
+	return err
 }
 
 // startNotifications sets up system notifications; call it once the GUI
@@ -212,8 +308,15 @@ func (s *Service) quotaView(now time.Time) map[string]*PlanQuota {
 				c := *live
 				pq = &c
 			}
-		} else if ws, at := s.engine.CachedWindows(def.ID); ws != nil {
+		} else {
+			ws, at := s.engine.CachedWindows(def.ID)
 			pq = cachedQuota(ws, at, now)
+			// Claude Code's status line, when newer than Kikri's last wake.
+			if d := s.statuslineData(); d != nil && (pq == nil || pq.At == nil || d.At.After(*pq.At)) {
+				if r := statuslineQuota(d, now); r != nil {
+					pq = r
+				}
+			}
 		}
 		if t, ok := used[def.Tool]; ok && !t.IsZero() {
 			if pq == nil {
@@ -229,6 +332,23 @@ func (s *Service) quotaView(now time.Time) map[string]*PlanQuota {
 	return out
 }
 
+// statuslineData reads what Claude Code's status line last reported, if the
+// relay is installed.
+func (s *Service) statuslineData() *statusline.Data {
+	s.mu.Lock()
+	st, root := s.snap.ClaudeStatusline, s.snap.AppDir.Root
+	s.mu.Unlock()
+	if st == nil || !st.Installed {
+		return nil
+	}
+	p, err := statusline.DefaultPaths(root)
+	if err != nil {
+		return nil
+	}
+	d, _ := statusline.Read(p.Data)
+	return d
+}
+
 // quotaTTL limits how often opening the popup re-queries Codex.
 const quotaTTL = time.Minute
 
@@ -239,6 +359,11 @@ func (s *Service) RefreshQuota(force bool) {
 	s.qmu.Lock()
 	if s.quotaBusy || (!force && time.Since(s.quotaAt) < quotaTTL) || s.engine == nil {
 		s.qmu.Unlock()
+		// Claude Code's status line may have reported since; it is a file read.
+		if s.engine != nil {
+			s.checkStatusline(false)
+			s.plansChanged()
+		}
 		return
 	}
 	s.quotaBusy = true
@@ -260,6 +385,7 @@ func (s *Service) RefreshQuota(force bool) {
 	}
 	cancel()
 
+	s.checkStatusline(false)
 	s.qmu.Lock()
 	s.quotaBusy, s.quotaAt = false, time.Now()
 	s.codexLive, s.lastUsed = live, used
@@ -329,6 +455,15 @@ func (s *Service) SetUseActivity(on bool) error {
 	return s.engine.UpdateSettings(func(st *scheduler.Settings) { st.UseActivity = on })
 }
 
+// SetDeferSkipped turns on or off waking again just after the running
+// window refreshes when a slot is skipped (D23).
+func (s *Service) SetDeferSkipped(on bool) error {
+	if s.engine == nil {
+		return errNoEngine
+	}
+	return s.engine.UpdateSettings(func(st *scheduler.Settings) { st.DeferSkipped = on })
+}
+
 // PauseToday skips (or, with false, restores) the rest of today's wakes.
 func (s *Service) PauseToday(pause bool) error {
 	if s.engine == nil {
@@ -379,10 +514,17 @@ func (s *Service) SetAutostart(on bool) error {
 }
 
 // FinishOnboarding closes the welcome view.
-func (s *Service) FinishOnboarding(startAtLogin bool) error {
+func (s *Service) FinishOnboarding(startAtLogin, claudeStatusline bool) error {
 	if err := s.updatePrefs(func(p *Prefs) { p.Onboarded = true }); err != nil {
 		return err
 	}
+	if claudeStatusline {
+		s.enableStatuslineByDefault()
+	} else if err := s.updatePrefs(func(p *Prefs) { p.StatuslineDecided = true }); err != nil {
+		return err
+	}
+	s.checkStatusline(false)
+	s.plansChanged()
 	s.mu.Lock()
 	notify := s.snap.Prefs.Notify
 	s.mu.Unlock()

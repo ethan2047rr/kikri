@@ -67,6 +67,7 @@ const (
 	TriggerMakeup    = "makeup"
 	TriggerRetry     = "retry"
 	TriggerManual    = "manual"
+	TriggerDeferred  = "deferred" // a skipped slot, run again just after the window refreshed
 )
 
 const (
@@ -88,7 +89,11 @@ type Settings struct {
 	Plans       map[string]schedule.Plan `json:"plans"`
 	Cutoff      schedule.Clock           `json:"cutoff"`      // make-up deadline for morning slots (F4.1)
 	UseActivity bool                     `json:"useActivity"` // Smart Skip basis B (D6, on by default)
-	PausedUntil time.Time                `json:"pausedUntil,omitempty"`
+	// DeferSkipped: when a slot is skipped because a window is running and
+	// its refresh time is known, wake again AfterRefresh after it (D23).
+	// Off by default.
+	DeferSkipped bool      `json:"deferSkipped"`
+	PausedUntil  time.Time `json:"pausedUntil,omitempty"`
 }
 
 const settingsKey = "scheduler"
@@ -110,6 +115,10 @@ type Deps struct {
 	Wake func(ctx context.Context, plan PlanDef, skip func(context.Context) (string, bool)) wake.Result
 	// CodexQuota reads Codex rate limits (read-only). nil: unavailable.
 	CodexQuota func(ctx context.Context) (*quota.Codex, error)
+	// ReportedFiveHour returns the 5-hour window's reset time as the tool
+	// itself last reported it outside Kikri's wakes (Claude Code's status
+	// line, D24), and when that report was made. nil or zero: unknown.
+	ReportedFiveHour func(plan PlanDef) (resetsAt, at time.Time)
 	// LastActivity returns when the user last used the plan's CLIs. nil: none.
 	LastActivity func(plan PlanDef) time.Time
 	// OnChange is called after anything the UI shows has changed.
@@ -292,12 +301,19 @@ func (e *Engine) tickPlan(ctx context.Context, def PlanDef, p schedule.Plan, s S
 		if r, ok := recs[at.Unix()]; ok && r.State.Final() {
 			continue
 		}
+		rec := recs[at.Unix()]
 		deadline := schedule.Deadline(at, s.Cutoff, e.d.Loc)
+		if rec.State == store.SlotDeferred {
+			// A deferred wake gets the same grace as a late slot.
+			deadline = rec.NextTry.Add(schedule.LateGrace)
+		}
 		if now.After(deadline) {
-			rec := recs[at.Unix()]
 			why := "missed (computer asleep or Kikri not running)"
-			if rec.State == store.SlotPending {
+			switch rec.State {
+			case store.SlotPending:
 				why = "still failing (no network?)"
+			case store.SlotDeferred:
+				why = "deferred wake missed (computer asleep or Kikri not running)"
 			}
 			e.finish(def, at, rec, store.SlotExpired, now)
 			e.log(def, &at, TriggerMakeup, now, wake.Result{Tool: def.Tool, Outcome: OutcomeExpired, StartedAt: now,
@@ -323,19 +339,22 @@ func (e *Engine) tickPlan(ctx context.Context, def PlanDef, p schedule.Plan, s S
 		e.log(def, &target, TriggerScheduled, now, wake.Result{Tool: def.Tool, Outcome: OutcomePaused, StartedAt: now, Message: "paused for today"})
 		return
 	}
-	if rec.State == store.SlotPending && now.Before(rec.NextTry) {
+	if (rec.State == store.SlotPending || rec.State == store.SlotDeferred) && now.Before(rec.NextTry) {
 		return
 	}
 
 	trigger := TriggerScheduled
 	switch {
+	case rec.State == store.SlotDeferred:
+		trigger = TriggerDeferred
 	case rec.State == store.SlotPending:
 		trigger = TriggerRetry
 	case now.Sub(target) > onTime:
 		trigger = TriggerMakeup
 	}
 
-	res := e.d.Wake(ctx, def, e.smartSkip(def, s))
+	var refresh time.Time // set by Smart Skip when it knows when the window refreshes
+	res := e.d.Wake(ctx, def, e.smartSkip(def, s, &refresh))
 
 	next := store.Slot{Plan: def.ID, At: target, Attempts: rec.Attempts}
 	switch res.Outcome {
@@ -343,6 +362,10 @@ func (e *Engine) tickPlan(ctx context.Context, def PlanDef, p schedule.Plan, s S
 		next.State = store.SlotDone
 	case wake.OutcomeSkipped:
 		next.State = store.SlotSkipped
+		if at, ok := e.deferTo(p, s, rec, refresh, now); ok {
+			next.State, next.NextTry = store.SlotDeferred, at
+			res.Message += "; deferred to " + at.In(e.d.Loc).Format("15:04")
+		}
 	case wake.OutcomeBusy:
 		next.State, next.NextTry = store.SlotPending, now.Add(TickInterval)
 	case wake.OutcomeOffline:
@@ -369,6 +392,31 @@ func (e *Engine) tickPlan(ctx context.Context, def PlanDef, p schedule.Plan, s S
 		e.log(def, &target, trigger, res.StartedAt, res)
 	}
 	e.changed()
+}
+
+// AfterRefresh is how long after a window refreshes a deferred wake runs:
+// waking at the exact second could still land in the old window.
+const AfterRefresh = 5 * time.Minute
+
+// deferTo decides whether a skipped slot wakes again after the running
+// window refreshes (D23): only when the refresh time is known, once per slot,
+// on the same day and before the plan's next slot.
+func (e *Engine) deferTo(p schedule.Plan, s Settings, rec store.Slot, refresh, now time.Time) (time.Time, bool) {
+	if !s.DeferSkipped || refresh.IsZero() || rec.State == store.SlotDeferred {
+		return time.Time{}, false
+	}
+	at := refresh.Add(AfterRefresh)
+	if !at.After(now) {
+		return time.Time{}, false
+	}
+	ny, nm, nd := now.In(e.d.Loc).Date()
+	if ay, am, ad := at.In(e.d.Loc).Date(); ay != ny || am != nm || ad != nd {
+		return time.Time{}, false
+	}
+	if next, ok := p.Next(now, e.d.Loc); ok && !at.Before(next) {
+		return time.Time{}, false
+	}
+	return at, true
 }
 
 func (e *Engine) finish(def PlanDef, at time.Time, rec store.Slot, state store.SlotState, now time.Time) {
@@ -404,7 +452,9 @@ func (e *Engine) WakeNow(ctx context.Context, planID string) (wake.Result, error
 // smartSkip builds the F3.4 check for one wake. Official quota data wins
 // when available; otherwise Kikri's own last wake (basis A) and the user's
 // last session activity (basis B) are used.
-func (e *Engine) smartSkip(def PlanDef, s Settings) func(context.Context) (string, bool) {
+//
+// When the skip is based on a known refresh time, it is stored in *refresh.
+func (e *Engine) smartSkip(def PlanDef, s Settings, refresh *time.Time) func(context.Context) (string, bool) {
 	return func(ctx context.Context) (string, bool) {
 		now := e.d.Now()
 		hhmm := func(t time.Time) string { return t.In(e.d.Loc).Format("15:04") }
@@ -419,17 +469,26 @@ func (e *Engine) smartSkip(def PlanDef, s Settings) func(context.Context) (strin
 						return "this plan has no 5-hour window (" + q.PlanType + ")", true
 					}
 					if q.Primary.Active(now) {
+						*refresh = q.Primary.ResetsAt
 						return "a window is already running; it resets at " + hhmm(q.Primary.ResetsAt), true
 					}
 					return "", false // authoritative: no window right now
 				}
 			}
 		case "claude":
-			// Claude has no read-only query; use the window reported by the
-			// last successful wake (basis 0, cached).
+			// Claude has no read-only query. Claude Code's status line (if the
+			// user opted in) reports windows the user opened themselves.
+			if e.d.ReportedFiveHour != nil {
+				if r, _ := e.d.ReportedFiveHour(def); r.After(now) {
+					*refresh = r
+					return "a window is already running; it resets at " + hhmm(r), true
+				}
+			}
+			// Else the window reported by the last successful wake (basis 0).
 			if w := fiveHour(last); w != nil {
 				official = true
 				if w.ResetsAt.After(now) {
+					*refresh = w.ResetsAt
 					return "the window opened by the " + hhmm(last.StartedAt) + " wake runs until " + hhmm(w.ResetsAt), true
 				}
 			}
@@ -485,8 +544,10 @@ type PlanStatus struct {
 	Schedule schedule.Plan    `json:"schedule"`
 	Times    []schedule.Clock `json:"times"` // effective wake times (preset resolved)
 	Next     *time.Time       `json:"next,omitempty"`
-	Last     *store.Entry     `json:"last,omitempty"`
-	Paused   bool             `json:"paused"`
+	// Deferred is when a skipped slot will wake again (D23), if pending.
+	Deferred *time.Time   `json:"deferred,omitempty"`
+	Last     *store.Entry `json:"last,omitempty"`
+	Paused   bool         `json:"paused"`
 }
 
 // Status reports every plan's schedule, next slot and last log entry.
@@ -504,6 +565,16 @@ func (e *Engine) Status() ([]PlanStatus, error) {
 			st.Next = &n
 		}
 		st.Last, _ = e.d.Store.LastEntry(def.ID)
+		if p.Enabled {
+			if recs, err := e.d.Store.Slots(def.ID, now.Add(-lookBack)); err == nil {
+				for _, r := range recs {
+					if r.State == store.SlotDeferred && r.NextTry.After(now.Add(-schedule.LateGrace)) {
+						t := r.NextTry
+						st.Deferred = &t
+					}
+				}
+			}
+		}
 		out = append(out, st)
 	}
 	return out, nil

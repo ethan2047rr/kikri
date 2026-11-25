@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ethan2047rr/kikri/internal/quota"
+	"github.com/ethan2047rr/kikri/internal/statusline"
 	"github.com/ethan2047rr/kikri/internal/wake"
 )
 
@@ -18,8 +19,9 @@ type QuotaWindow struct {
 
 // PlanQuota is what is known about a plan's windows.
 type PlanQuota struct {
-	// Source is "live" (official read-only query, Codex) or "cached" (from
-	// the last successful wake, Claude, which has no read-only query).
+	// Source is "live" (official read-only query, Codex), "cached" (from
+	// the last successful wake, Claude, which has no read-only query) or
+	// "statusline" (Claude Code's status line, D24).
 	Source       string       `json:"source,omitempty"`
 	At           *time.Time   `json:"at,omitempty"` // when the data was read or reported
 	FiveHour     *QuotaWindow `json:"fiveHour,omitempty"`
@@ -73,6 +75,28 @@ func codexQuota(q *quota.Codex, at time.Time) *PlanQuota {
 
 // cachedQuota converts the windows reported by the last successful wake.
 // Claude reports utilization as 0..1.
+// statuslineQuota converts Claude Code's status line report (D24).
+func statuslineQuota(d *statusline.Data, now time.Time) *PlanQuota {
+	at := d.At
+	pq := &PlanQuota{Source: "statusline", At: &at}
+	conv := func(w *statusline.Window) *QuotaWindow {
+		if w == nil {
+			return nil
+		}
+		r := w.ResetsAt
+		qw := &QuotaWindow{ResetsAt: &r, Active: r.After(now)}
+		if w.UsedPercent != nil && qw.Active {
+			qw.UsedPercent = pct(*w.UsedPercent)
+		}
+		return qw
+	}
+	pq.FiveHour, pq.Weekly = conv(d.FiveHour), conv(d.SevenDay)
+	if pq.FiveHour == nil && pq.Weekly == nil {
+		return nil
+	}
+	return pq
+}
+
 func cachedQuota(ws []wake.Window, at, now time.Time) *PlanQuota {
 	if len(ws) == 0 {
 		return nil

@@ -10,6 +10,8 @@ import (
 	"os"
 
 	"github.com/ethan2047rr/kikri/internal/app"
+	"github.com/ethan2047rr/kikri/internal/appdir"
+	"github.com/ethan2047rr/kikri/internal/statusline"
 )
 
 // version is set at build time: -ldflags "-X main.version=v0.1.0".
@@ -22,9 +24,12 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "with -wake: print the command instead of running it")
 	planSpec := flag.String("plan", "", "set a schedule: `PLAN=early-bird|three|HH:MM,HH:MM|off`, e.g. claude=early-bird")
 	status := flag.Bool("status", false, "print schedules, next wakes and the recent log as JSON")
+	relay := flag.Bool(statusline.Flag, false, "run as Claude Code's status line command: save its rate limits, then run the user's original status line (set up from Kikri's settings)")
 	flag.Parse()
 
 	switch {
+	case *relay:
+		os.Exit(runRelay())
 	case *showVersion:
 		fmt.Println("kikri", version)
 	case *diagnose:
@@ -62,4 +67,18 @@ func printOrFail(v any, err error) {
 		os.Exit(1)
 	}
 	printJSON(v)
+}
+
+// runRelay is the status line relay (D24). It must stay quick and never
+// break the user's status line, so it does not open the database.
+func runRelay() int {
+	layout, err := appdir.Resolve()
+	if err != nil {
+		return 0
+	}
+	p, err := statusline.DefaultPaths(layout.Root)
+	if err != nil {
+		return 0
+	}
+	return statusline.Relay(p, os.Stdin, os.Stdout, os.Stderr)
 }

@@ -10,9 +10,9 @@ import { h, timeField } from "./ui";
 //   the wake-up time).
 // - A 24-hour strip draws each 5-hour window, so gaps and overlaps are
 //   visible. It is a picture, not a control: dragging is hard to aim.
-// - Times are a chain, earliest first: each wake follows the previous one by
-//   the window plus 5 minutes, so it lands just after the refresh. Editing
-//   any time moves the whole chain.
+// - Times are listed earliest first and edited independently. A new time
+//   defaults to the window plus 5 minutes after the last one, so it lands
+//   just after the refresh.
 // - Steppers move a time by an hour (15 minutes with Shift).
 // - Weekday shortcuts, and a preview of the next wake.
 
@@ -78,36 +78,35 @@ export function nextWakeLabel(v: ScheduleValue, now = new Date()): string | null
   return null;
 }
 
-/** Later wakes that fall inside an earlier window will be skipped. */
-function overlapNote(times: string[], windowMins: number): string | null {
-  for (let i = 1; i < times.length; i++) {
-    const prev = times[i - 1]!;
-    if (toMin(times[i]!) - toMin(prev) < windowMins) {
-      return `${times[i]} 时 ${prev} 开的窗口还没结束，这次会被跳过；隔 5 小时以上才能接上下一轮`;
-    }
+/** Explains the first wake that falls inside an earlier window. */
+function overlapNote(times: string[], skip: Map<string, number | null>): string | null {
+  for (const [t, at] of skip) {
+    return at === null
+      ? `${t} 时上一轮窗口还没结束，这次会被跳过；隔 5 小时以上才能接上下一轮`
+      : `${t} 时上一轮窗口还没结束，会等它刷新后 ${fromMin(at)} 再唤醒`;
   }
   return null;
 }
 
-/** Times that fall inside the window opened by an earlier one. */
-function skippedTimes(times: string[], windowMins: number): Set<string> {
-  const out = new Set<string>();
+/**
+ * Times that fall inside the window opened by an earlier one, mapped to when
+ * they wake instead (the refresh plus 5 minutes), or null when they are just
+ * skipped: deferral off, past midnight, or not before the next time. Mirrors
+ * the scheduler's deferTo.
+ */
+function skippedTimes(times: string[], windowMins: number, defer: boolean): Map<string, number | null> {
+  const out = new Map<string, number | null>();
   let openUntil = -1;
-  for (const t of times) {
+  times.forEach((t, i) => {
     const m = toMin(t);
-    if (m < openUntil) out.add(t);
-    else openUntil = m + windowMins;
-  }
-  return out;
-}
-
-/** n times spaced by gap minutes, with time i at anchor; drops any past midnight. */
-function chain(anchor: number, i: number, n: number, gap: number): string[] {
-  const out: string[] = [];
-  for (let j = 0; j < n; j++) {
-    const m = anchor + (j - i) * gap;
-    if (m >= 0 && m < 1440) out.push(fromMin(m));
-  }
+    if (m >= openUntil) { openUntil = m + windowMins; return; }
+    const at = openUntil + AFTER_REFRESH;
+    const next = times[i + 1] ? toMin(times[i + 1]!) : 1440;
+    if (defer && at < 1440 && at < next) {
+      out.set(t, at);
+      openUntil = at + windowMins;
+    } else out.set(t, null);
+  });
   return out;
 }
 
@@ -121,20 +120,20 @@ function stepper(label: string, onStep: (mins: number) => void): HTMLElement {
 }
 
 /** A 24-hour strip with one block per window. */
-function timeline(times: string[], windowMins: number): HTMLElement {
+function timeline(times: string[], windowMins: number, skip: Map<string, number | null>): HTMLElement {
   const bar = h("div", { class: "tl-bar", role: "img", "aria-label": times.map((t) => `${t} 到 ${fromMin(toMin(t) + windowMins)}`).join("，") });
-  const skip = skippedTimes(times, windowMins);
   for (const t of times) {
-    const start = toMin(t);
+    const at = skip.get(t);
+    const start = at ?? toMin(t); // a deferred wake opens its window later
     const end = start + windowMins;
-    const skipped = skip.has(t);
+    const skipped = at === null;
     // A window past midnight is drawn in two parts.
     const parts: [number, number][] = end <= 1440 ? [[start, end]] : [[start, 1440], [0, end - 1440]];
     for (const [a, b] of parts) {
       bar.append(h("span", {
         class: skipped ? "tl-win skip" : "tl-win",
         style: `left:${(a / 1440) * 100}%;width:${((b - a) / 1440) * 100}%`,
-        title: skipped ? `${t} 会被跳过` : `${t}–${fromMin(end)}`,
+        title: skipped ? `${t} 会被跳过` : `${fromMin(start)}–${fromMin(end)}`,
       }));
     }
   }
@@ -145,28 +144,35 @@ function timeline(times: string[], windowMins: number): HTMLElement {
   return h("div", { class: "timeline" }, bar, ticks);
 }
 
+function refreshLabel(t: string, deferred: number | null | undefined, windowMins: number): HTMLElement {
+  if (deferred === null) return h("span", { class: "refresh warn-text" }, "会被跳过");
+  if (deferred !== undefined) {
+    return h("span", { class: "refresh", title: `${t} 时窗口还在跑，等刷新后再唤醒` },
+      "顺延 ", h("b", null, fromMin(deferred)), " → ", h("b", null, fromMin(deferred + windowMins)));
+  }
+  return h("span", { class: "refresh" }, "→ ", h("b", null, fromMin(toMin(t) + windowMins)), " 刷新");
+}
+
 /** Times, timeline, templates, weekdays and the next-wake preview. */
-export function scheduleEditor(value: ScheduleValue, onChange: (v: ScheduleValue & { preset: Preset }) => void, windowMins = 300): HTMLElement {
+export function scheduleEditor(value: ScheduleValue, onChange: (v: ScheduleValue & { preset: Preset }) => void, windowMins = 300, deferSkipped = false): HTMLElement {
   const times = normalize(value.times);
   const weekdays = value.weekdays;
   const emit = (next: Partial<ScheduleValue>) => {
     const t = normalize(next.times ?? times);
     if (t.length > 0) onChange({ times: t, weekdays: next.weekdays ?? weekdays, preset: presetFor(t) });
   };
-  const skip = skippedTimes(times, windowMins);
+  const skip = skippedTimes(times, windowMins, deferSkipped);
   const gap = windowMins + AFTER_REFRESH;
-  // Moving one time moves the chain, keeping every wake right after a refresh.
-  const move = (i: number, v: string) => emit({ times: chain(toMin(v), i, times.length, gap) });
+  const move = (i: number, v: string) => emit({ times: times.map((x, j) => (j === i ? v : x)) });
   const last = times[times.length - 1];
-  const nextAdd = last ? toMin(last) + gap : toMin("06:30");
+  // After the last window: a deferred last wake opens it later.
+  const nextAdd = last ? (skip.get(last) ?? toMin(last)) + gap : toMin("06:30");
 
   const rows = h("div", { class: "wake-rows" }, times.map((t, i) => h("div", { class: "wake-row" },
     h("span", { class: "time-edit" },
       timeField(t, (v) => move(i, v), `唤醒时间 ${i + 1}`),
       stepper(`唤醒时间 ${t} `, (m) => move(i, fromMin(toMin(t) + m)))),
-    skip.has(t)
-      ? h("span", { class: "refresh warn-text" }, "会被跳过")
-      : h("span", { class: "refresh" }, "→ ", h("b", null, fromMin(toMin(t) + windowMins)), " 刷新"),
+    refreshLabel(t, skip.get(t), windowMins),
     times.length > 1 && h("button", {
       type: "button", class: "x", "aria-label": `删除 ${t}`,
       onclick: () => emit({ times: times.filter((_, j) => j !== i) }),
@@ -203,12 +209,11 @@ export function scheduleEditor(value: ScheduleValue, onChange: (v: ScheduleValue
       }, DAY_SHORT[i]);
     })));
 
-  const overlap = overlapNote(times, windowMins);
+  const overlap = overlapNote(times, skip);
   const next = nextWakeLabel({ times, weekdays });
   return h("div", { class: "stack" },
-    h("div", { class: "stack-sm" }, rows, timeline(times, windowMins),
-      times.length > 1 && !skip.size && h("span", { class: "row-sub" }, "每轮在上一轮刷新后 5 分钟唤醒；改任意一个，其他会一起移动"),
-      overlap && h("span", { class: "row-sub warn-text" }, overlap),
+    h("div", { class: "stack-sm" }, rows, timeline(times, windowMins, skip),
+      overlap && h("span", { class: overlap.includes("跳过") ? "row-sub warn-text" : "row-sub" }, overlap),
       templates),
     days,
     h("div", { class: "next-wake" }, next ? ["下次唤醒：", h("b", null, next)] : "没有选星期，不会唤醒"));

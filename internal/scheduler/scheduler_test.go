@@ -30,15 +30,16 @@ func atDay(day, hhmm string) time.Time {
 
 // harness is an engine with a settable clock and a scripted fake waker.
 type harness struct {
-	t       *testing.T
-	st      *store.Store
-	path    string
-	now     time.Time
-	results []wake.Outcome // returned in order; then OK
-	calls   []time.Time
-	e       *Engine
-	quota   *quota.Codex
-	active  time.Time
+	t        *testing.T
+	st       *store.Store
+	path     string
+	now      time.Time
+	results  []wake.Outcome // returned in order; then OK
+	calls    []time.Time
+	e        *Engine
+	quota    *quota.Codex
+	active   time.Time
+	reported time.Time // Claude Code status line's five_hour resets_at
 }
 
 func newHarness(t *testing.T, plan schedule.Plan) *harness {
@@ -86,8 +87,16 @@ func (h *harness) open() {
 			}
 			return h.quota, nil
 		},
-		LastActivity: func(PlanDef) time.Time { return h.active },
+		LastActivity:     func(PlanDef) time.Time { return h.active },
+		ReportedFiveHour: func(PlanDef) (time.Time, time.Time) { return h.reported, h.now },
 	})
+}
+
+func (h *harness) deferOn() {
+	h.t.Helper()
+	if err := h.e.UpdateSettings(func(s *Settings) { s.DeferSkipped = true }); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 // restart simulates quitting and relaunching Kikri: same database, new engine.
@@ -334,7 +343,8 @@ func TestSmartSkipActivity(t *testing.T) {
 
 func TestSmartSkipCodexOfficialDataWins(t *testing.T) {
 	h := newHarness(t, early(at("05:00")))
-	skip := h.e.smartSkip(Plans[1], DefaultSettings())
+	var refresh time.Time
+	skip := h.e.smartSkip(Plans[1], DefaultSettings(), &refresh)
 	now := at("06:30")
 	h.now = now
 	h.active = at("05:58") // recent activity, but...
@@ -412,4 +422,151 @@ func TestStatus(t *testing.T) {
 	if st[1].Schedule.Enabled || st[1].Next != nil {
 		t.Fatalf("chatgpt should be off: %+v", st[1])
 	}
+}
+
+func custom(since time.Time, times ...string) schedule.Plan {
+	cs := make([]schedule.Clock, len(times))
+	for i, t := range times {
+		cs[i] = schedule.MustClock(t)
+	}
+	return schedule.Plan{Enabled: true, Preset: schedule.PresetCustom, Times: cs, Weekdays: schedule.Workdays, Since: since}
+}
+
+// codexHarness runs the Codex plan, whose Smart Skip uses official data.
+// Deferral (off by default) is turned on.
+func codexHarness(t *testing.T, plan schedule.Plan) *harness {
+	t.Helper()
+	h := newHarness(t, schedule.Plan{Since: plan.Since})
+	h.deferOn()
+	if err := h.e.SetPlan("chatgpt", plan); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func (h *harness) codexSlot(t time.Time) store.Slot {
+	h.t.Helper()
+	m, err := h.st.Slots("chatgpt", t.Add(-time.Second))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return m[t.Unix()]
+}
+
+func running(resets time.Time) *quota.Codex {
+	return &quota.Codex{PlanType: "plus", Primary: &quota.Window{WindowMins: 300, ResetsAt: resets}}
+}
+
+func TestDeferSkippedWakesAfterRefresh(t *testing.T) {
+	h := codexHarness(t, custom(at("05:00"), "12:05"))
+	h.quota = running(at("13:30:20"))
+	h.tickAt(at("12:05:05"))
+	h.wantCalls(0)
+	s := h.codexSlot(at("12:05"))
+	if s.State != store.SlotDeferred || !s.NextTry.Equal(at("13:35:20")) {
+		t.Fatalf("12:05 = %+v", s)
+	}
+	st, _ := h.e.Status()
+	if st[1].Deferred == nil || !st[1].Deferred.Equal(at("13:35:20")) {
+		t.Fatalf("status deferred = %v", st[1].Deferred)
+	}
+
+	h.tickAt(at("13:00"))
+	h.wantCalls(0)
+	h.quota = running(at("13:35:30").Add(5 * time.Hour)) // virtual: no window
+	h.tickAt(at("13:35:30"))
+	h.wantCalls(1)
+	if s := h.codexSlot(at("12:05")); s.State != store.SlotDone {
+		t.Fatalf("after deferred wake = %+v", s)
+	}
+	es, _ := h.st.Entries("chatgpt", 10)
+	if es[0].Trigger != TriggerDeferred {
+		t.Fatalf("trigger = %q", es[0].Trigger)
+	}
+}
+
+func TestDeferSkippedOnlyOnce(t *testing.T) {
+	h := codexHarness(t, custom(at("05:00"), "12:05"))
+	h.quota = running(at("13:30"))
+	h.tickAt(at("12:05:05"))
+	h.quota = running(at("15:00")) // the user started a new window meanwhile
+	h.tickAt(at("13:35:05"))
+	h.wantCalls(0)
+	if s := h.codexSlot(at("12:05")); s.State != store.SlotSkipped {
+		t.Fatalf("second skip = %+v", s)
+	}
+}
+
+func TestDeferSkippedOffByDefault(t *testing.T) {
+	h := newHarness(t, schedule.Plan{Since: at("05:00")})
+	if err := h.e.SetPlan("chatgpt", custom(at("05:00"), "12:05")); err != nil {
+		t.Fatal(err)
+	}
+	h.quota = running(at("13:30"))
+	h.tickAt(at("12:05:05"))
+	if s := h.codexSlot(at("12:05")); s.State != store.SlotSkipped {
+		t.Fatalf("12:05 = %+v", s)
+	}
+}
+
+func TestDeferSkippedNotPastNextSlot(t *testing.T) {
+	// 06:30 is skipped while a window runs to 11:00; deferring to 11:05 would
+	// collide with the 11:00 slot, so the next slot handles it.
+	h := codexHarness(t, custom(at("05:00"), "06:30", "11:00"))
+	h.quota = running(at("11:00"))
+	h.tickAt(at("06:30:05"))
+	if s := h.codexSlot(at("06:30")); s.State != store.SlotSkipped {
+		t.Fatalf("06:30 = %+v", s)
+	}
+}
+
+func TestDeferSkippedNotPastMidnight(t *testing.T) {
+	h := codexHarness(t, custom(at("05:00"), "21:00"))
+	h.quota = running(at("23:58"))
+	h.tickAt(at("21:00:05"))
+	if s := h.codexSlot(at("21:00")); s.State != store.SlotSkipped {
+		t.Fatalf("21:00 = %+v", s)
+	}
+}
+
+func TestDeferredMissedExpires(t *testing.T) {
+	h := codexHarness(t, custom(at("05:00"), "12:05"))
+	h.quota = running(at("13:30"))
+	h.tickAt(at("12:05:05"))
+	h.tickAt(at("16:00")) // asleep through 13:35 + grace
+	h.wantCalls(0)
+	if s := h.codexSlot(at("12:05")); s.State != store.SlotExpired {
+		t.Fatalf("12:05 = %+v", s)
+	}
+}
+
+func TestDeferSkippedClaudeCachedWindow(t *testing.T) {
+	// Claude: the 06:00 wake opened a window to 11:00; a 09:00 slot is
+	// deferred to 11:05.
+	h := newHarness(t, custom(at("05:00"), "06:00", "09:00"))
+	h.deferOn()
+	h.tickAt(at("06:00:05"))
+	h.tickAt(at("09:00:05"))
+	h.wantCalls(1)
+	if s := h.slot(at("09:00")); s.State != store.SlotDeferred || !s.NextTry.Equal(at("11:05")) {
+		t.Fatalf("09:00 = %+v", s)
+	}
+	h.tickAt(at("11:05:10"))
+	h.wantCalls(2)
+}
+
+func TestSmartSkipClaudeStatusLine(t *testing.T) {
+	// The user opened a window at 05:40 by working; Claude Code's status line
+	// reported it resets at 10:40, so 06:30 is skipped with that time known
+	// (and deferral, when on, wakes at 10:45).
+	h := newHarness(t, early(at("05:00")))
+	h.deferOn()
+	h.reported = at("10:40")
+	h.tickAt(at("06:30:05"))
+	h.wantCalls(0)
+	if s := h.slot(at("06:30")); s.State != store.SlotDeferred || !s.NextTry.Equal(at("10:45")) {
+		t.Fatalf("06:30 = %+v", s)
+	}
+	h.tickAt(at("10:45:10"))
+	h.wantCalls(1)
 }

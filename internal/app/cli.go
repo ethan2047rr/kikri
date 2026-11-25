@@ -102,7 +102,7 @@ func StatusReport() (any, error) {
 		return nil, err
 	}
 	svc.RefreshQuota(true)
-	return map[string]any{"plans": plans, "cutoff": settings.Cutoff, "useActivity": settings.UseActivity,
+	return map[string]any{"plans": plans, "cutoff": settings.Cutoff, "useActivity": settings.UseActivity, "deferSkipped": settings.DeferSkipped,
 		"pausedUntil": settings.PausedUntil, "usage": svc.Snapshot().Quota, "log": log}, nil
 }
 

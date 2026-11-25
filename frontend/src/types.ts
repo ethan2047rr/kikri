@@ -61,7 +61,7 @@ export type Outcome =
   | "ok" | "quota_exhausted" | "not_logged_in" | "network_error" | "timeout"
   | "offline" | "skipped" | "busy" | "failed" | "expired" | "paused";
 
-export type Trigger = "scheduled" | "makeup" | "retry" | "manual";
+export type Trigger = "scheduled" | "makeup" | "retry" | "manual" | "deferred";
 
 export interface Entry {
   id: number;
@@ -96,6 +96,7 @@ export interface PlanStatus {
   schedule: SchedulePlan;
   times: string[] | null;
   next?: string;
+  deferred?: string; // a skipped slot wakes again at this time
   last?: Entry;
   paused: boolean;
 }
@@ -104,6 +105,7 @@ export interface SchedulerSettings {
   plans: Record<string, SchedulePlan>;
   cutoff: string;
   useActivity: boolean;
+  deferSkipped: boolean;
   pausedUntil?: string;
 }
 
@@ -114,7 +116,7 @@ export interface QuotaWindow {
 }
 
 export interface PlanQuota {
-  source?: "live" | "cached";
+  source?: "live" | "cached" | "statusline";
   at?: string;
   fiveHour?: QuotaWindow;
   weekly?: QuotaWindow;
@@ -124,7 +126,14 @@ export interface PlanQuota {
   lastUsed?: string;
 }
 
+export interface StatuslineState {
+  installed: boolean;
+  at?: string; // last report from Claude Code
+  error?: string;
+}
+
 export interface Snapshot {
+  claudeStatusline?: StatuslineState;
   version: string;
   appDir: Layout;
   appDirError?: string;

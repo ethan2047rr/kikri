@@ -1,4 +1,4 @@
-import { cleanVersion, LOGIN_COMMAND, planTitle, toolFor } from "./format";
+import { cleanVersion, LOGIN_COMMAND, planTitle, toolFor, whenLabel } from "./format";
 import { logo } from "./logos";
 import { scheduleEditor } from "./schedule-ui";
 import type { PlanStatus, SchedulePlan, Snapshot } from "./types";
@@ -27,7 +27,7 @@ function scheduleCard(snap: Snapshot, plans: PlanStatus[]): HTMLElement {
 
   const editor = scheduleEditor({ times: ps.times ?? [], weekdays: p.weekdays }, (v) =>
     save(ps.plan.id, { ...p, preset: v.preset, times: v.preset === "custom" ? v.times : null, weekdays: v.weekdays }),
-  ps.plan.windowMins);
+  ps.plan.windowMins, snap.settings?.deferSkipped ?? false);
 
   return h("div", { class: "panel pad stack" }, pickPlan, editor);
 }
@@ -52,9 +52,9 @@ function planRows(snap: Snapshot, plans: PlanStatus[]): HTMLElement {
   }));
 }
 
-function option(name: string, detail: string, on: boolean, set: (on: boolean) => Promise<unknown>, disabled = false): HTMLElement {
+function option(name: string, detail: string | Node, on: boolean, set: (on: boolean) => Promise<unknown>, disabled = false): HTMLElement {
   return h("div", { class: "row" },
-    h("div", { class: "row-text" }, h("span", { class: "row-name" }, name), h("span", { class: "row-sub" }, detail)),
+    h("div", { class: "row-text" }, h("span", { class: "row-name" }, name), typeof detail === "string" ? h("span", { class: "row-sub" }, detail) : detail),
     toggle(name, on, (v) => void attempt(() => set(v)), disabled));
 }
 
@@ -64,6 +64,15 @@ export function renderSettings(snap: Snapshot, redraw: () => void, openLog: () =
   const st = snap.settings;
 
   const cutoff = timeField(st?.cutoff ?? "09:00", (v) => void attempt(() => call("SetCutoff", v)), "补发截止时间", "cutoff");
+
+  const sl = snap.claudeStatusline;
+  const claudeFound = toolFor(snap, "claude")?.found !== false;
+  const slDetail = sl?.error
+    ? h("span", { class: "row-sub warn-text" }, sl.error)
+    : sl?.installed
+      ? h("span", { class: "row-sub" }, sl.at ? `已接入 · Claude Code 最近一次报告 ${whenLabel(sl.at)}` : "已接入 · 下次用 Claude Code 时开始更新")
+      : h("span", { class: "row-sub" }, "你自己用 Claude Code 时，读取它状态栏里的刷新时间和用量，不花 token。会在 ",
+        h("code", null, "~/.claude/settings.json"), " 的状态栏命令前加一层转发：原来的显示不变，没有状态栏的显示一行额度；关掉即还原");
 
   const notifyDetail = snap.notifyUnavailable
     ? "直接运行程序时系统不允许发通知；从 Kikri.app 启动后可用"
@@ -88,6 +97,9 @@ export function renderSettings(snap: Snapshot, redraw: () => void, openLog: () =
       h("div", { class: "panel" },
         option("参考你自己的使用", "你 5 小时内用过就不再唤醒；只看会话文件的修改时间，不读内容",
           st?.useActivity ?? true, (v) => call("SetUseActivity", v)),
+        claudeFound && option("读取 Claude Code 状态栏", slDetail, !!sl?.installed, (v) => call("SetClaudeStatusline", v)),
+        option("窗口在跑时顺延", "到点时窗口还没刷新，就等它刷新后 5 分钟再唤醒一次，不直接跳过",
+          st?.deferSkipped ?? false, (v) => call("SetDeferSkipped", v)),
         option("开机自启", "登录后在菜单栏常驻，到点才能唤醒", snap.autostart, (v) => call("SetAutostart", v)),
         option("通知", notifyDetail, snap.prefs.notify && !snap.notifyUnavailable, (v) => call("SetNotify", v), !!snap.notifyUnavailable))),
     h("section", { class: "stack-xs" }, h("h2", { class: "section-label" }, "记录"),
